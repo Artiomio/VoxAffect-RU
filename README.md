@@ -73,6 +73,20 @@ python -m src.train_sklearn --subset-path data/processed/subset_binary.csv
   --task binary \
   --samples-per-class 300 \
   --output data/processed/subset_binary.csv
+
+.venv/bin/python -m src.train_sklearn \
+  --subset-path data/processed/subset_binary.csv \
+  --artifacts-dir artifacts \
+  --test-size 0.2 \
+  --seed 42
+```
+
+Первый sklearn baseline на `subset_binary.csv`:
+
+```text
+accuracy: 0.7333
+macro F1: 0.7327
+validation rows: 120
 ```
 
 ## Роль Дианы
