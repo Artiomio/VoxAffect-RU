@@ -1,0 +1,403 @@
+# Experiment Log
+
+Рабочий журнал проекта Vox Games / DUSHA Emotion MVP.
+
+Цель журнала — фиксировать ход экспериментов так, чтобы из него можно было
+потом собрать фрагменты дипломной работы: описание данных, методики,
+экспериментальных условий, результатов и ограничений.
+
+## Как вести записи
+
+Для каждого существенного шага фиксируем:
+
+- дату;
+- цель;
+- входные данные;
+- команды или скрипты;
+- параметры;
+- результат;
+- выводы;
+- ограничения;
+- следующий шаг.
+
+Generated files в `data/` и `artifacts/` локальные и не коммитятся. В журнале
+фиксируются пути, параметры и численные результаты.
+
+## 2026-05-22 — Инициализация проекта
+
+### Цель
+
+Подготовить минимальный воспроизводимый проект для дипломного MVP по анализу
+эмоциональной окраски русской речи.
+
+### Входные материалы
+
+- Датасет DUSHA: `KELONMYOSA/dusha_emotion_audio`.
+- Legacy notebook Дианы: `legacy/diana_legacy.json.ipynb`.
+- План проекта: `PROJECT_PLAN.md`.
+
+### Решения
+
+- Не начинать с Wav2Vec2/HuBERT fine-tuning.
+- Сначала построить CPU-friendly baseline.
+- Использовать DUSHA labels напрямую, без weak labeling через Whisper или text sentiment.
+- Сохранять большие локальные данные в `data/`, а generated results в `artifacts/`.
+- Не коммитить `.venv/`, `data/`, generated `artifacts/`.
+
+### Git
+
+Создан репозиторий, ветка `main`.
+
+Коммиты:
+
+```text
+882a158 Initial DUSHA emotion baseline project
+```
+
+## 2026-05-22 — Загрузка и распаковка DUSHA
+
+### Цель
+
+Получить локальную копию DUSHA, пригодную для быстрого эксперимента без
+повторного скачивания из Hugging Face.
+
+### Команды
+
+```bash
+.venv/bin/hf download KELONMYOSA/dusha_emotion_audio \
+  --repo-type dataset \
+  --local-dir data/dusha_emotion_audio
+
+tar -xzf data/dusha_emotion_audio/data/train.tar.gz \
+  -C data/dusha_emotion_audio/data
+
+tar -xzf data/dusha_emotion_audio/data/test.tar.gz \
+  -C data/dusha_emotion_audio/data
+```
+
+### Результат
+
+Локальная структура:
+
+```text
+data/dusha_emotion_audio/data/train.csv
+data/dusha_emotion_audio/data/test.csv
+data/dusha_emotion_audio/data/train/
+data/dusha_emotion_audio/data/test/
+data/dusha_emotion_audio/data/train.tar.gz
+data/dusha_emotion_audio/data/test.tar.gz
+```
+
+Количество аудиофайлов после распаковки:
+
+```text
+train: 96,680 wav-файлов
+test:  24,171 wav-файлов
+```
+
+Полный размер локальной папки датасета после распаковки:
+
+```text
+data/dusha_emotion_audio: 28G
+```
+
+### Ограничения
+
+Архивы оставлены на месте. Это увеличивает локальный размер, но даёт быстрый
+fallback на случай повреждения распакованных файлов.
+
+## 2026-05-22 — Inspection датасета
+
+### Цель
+
+Проверить реальную структуру DUSHA перед обучением модели.
+
+### Скрипт
+
+```text
+src/inspect_dataset.py
+```
+
+### Команды
+
+```bash
+.venv/bin/python -m src.inspect_dataset \
+  --data-dir data/dusha_emotion_audio/data \
+  --split train \
+  --sample-size 20
+
+.venv/bin/python -m src.inspect_dataset \
+  --data-dir data/dusha_emotion_audio/data \
+  --split test \
+  --sample-size 20
+```
+
+### Результат
+
+Доступные split'ы:
+
+```text
+train
+test
+```
+
+Колонки:
+
+```text
+file_name
+label
+```
+
+Распределение labels в `train`:
+
+```text
+neutral:  63,701
+angry:    12,298
+sad:      10,256
+positive:  9,541
+other:       884
+```
+
+Распределение labels в `test`:
+
+```text
+neutral:  15,886
+angry:     3,072
+sad:       2,506
+positive:  2,481
+other:       226
+```
+
+Проверка путей:
+
+```text
+20/20 sample train audio paths exist
+20/20 sample test audio paths exist
+```
+
+Оценка длительностей на 20 train examples:
+
+```text
+min: 2.390 sec
+p50: 4.280 sec
+p90: 5.280 sec
+max: 5.660 sec
+```
+
+Оценка длительностей на 20 test examples:
+
+```text
+min: 0.799 sec
+p50: 4.040 sec
+p90: 5.920 sec
+max: 6.380 sec
+```
+
+### Вывод
+
+DUSHA уже содержит готовые короткие аудиофрагменты и emotion labels. Для первого
+MVP можно не делать нарезку длинного аудио и не применять weak labeling.
+
+### Git
+
+```text
+882a158 Initial DUSHA emotion baseline project
+```
+
+## 2026-05-22 — Balanced subset
+
+### Цель
+
+Собрать маленький сбалансированный subset для быстрого baseline.
+
+### Скрипт
+
+```text
+src/make_subset.py
+```
+
+### Binary mapping
+
+```text
+positive -> 1
+angry    -> 0
+sad      -> 0
+neutral  -> skip
+other    -> skip
+```
+
+### 3-class mapping
+
+```text
+positive -> positive
+angry    -> negative
+sad      -> negative
+neutral  -> neutral
+other    -> skip
+```
+
+### Команды
+
+```bash
+.venv/bin/python -m src.make_subset \
+  --data-dir data/dusha_emotion_audio/data \
+  --split train \
+  --task binary \
+  --samples-per-class 300 \
+  --output data/processed/subset_binary.csv
+
+.venv/bin/python -m src.make_subset \
+  --data-dir data/dusha_emotion_audio/data \
+  --split train \
+  --task 3class \
+  --samples-per-class 300 \
+  --output data/processed/subset_3class.csv
+```
+
+### Результат
+
+Binary subset:
+
+```text
+target_label 0: 300
+target_label 1: 300
+total:          600
+```
+
+3-class subset:
+
+```text
+negative: 300
+neutral:  300
+positive: 300
+total:    900
+```
+
+### Вывод
+
+Binary subset подходит для первого sanity-check baseline. Нейтральные и `other`
+примеры на первом этапе исключены, чтобы задача была проще и интерпретируемее.
+
+### Git
+
+```text
+da25f6a Add DUSHA subset builder
+```
+
+## 2026-05-22 — Sklearn audio baseline
+
+### Цель
+
+Получить первые осмысленные метрики без PyTorch/CUDA на маленьком binary subset.
+
+### Скрипты
+
+```text
+src/features.py
+src/train_sklearn.py
+```
+
+### Данные
+
+```text
+subset: data/processed/subset_binary.csv
+rows_total: 600
+rows_used: 600
+train rows: 480
+validation rows: 120
+```
+
+### Признаки
+
+Извлечено 48 числовых признаков:
+
+```text
+MFCC mean/std, n_mfcc=20
+RMS mean/std
+spectral centroid mean/std
+spectral bandwidth mean/std
+zero crossing rate mean/std
+```
+
+Аудио загружалось в mono при `sample_rate=16000`, `max_duration=6.0 sec`.
+
+### Модель
+
+```text
+StandardScaler + LogisticRegression
+class_weight=balanced
+test_size=0.2
+seed=42
+```
+
+### Команда
+
+```bash
+.venv/bin/python -m src.train_sklearn \
+  --subset-path data/processed/subset_binary.csv \
+  --artifacts-dir artifacts \
+  --test-size 0.2 \
+  --seed 42
+```
+
+### Результаты
+
+Validation set:
+
+```text
+accuracy:        0.7333
+precision_macro: 0.7357
+recall_macro:    0.7333
+f1_macro:        0.7327
+```
+
+Classification report:
+
+```text
+              precision    recall  f1-score   support
+
+           0     0.7121    0.7833    0.7460        60
+           1     0.7593    0.6833    0.7193        60
+
+    accuracy                         0.7333       120
+   macro avg     0.7357    0.7333    0.7327       120
+weighted avg     0.7357    0.7333    0.7327       120
+```
+
+Generated artifacts:
+
+```text
+artifacts/metrics.json
+artifacts/classification_report.txt
+artifacts/confusion_matrix.png
+artifacts/predictions.csv
+```
+
+### Предварительный вывод
+
+Даже простой baseline на hand-crafted audio features показывает качество выше
+случайного угадывания на сбалансированной бинарной задаче. Это хороший sanity
+check: labels, пути к аудио, feature extraction и train/eval loop работают.
+
+### Ограничения
+
+- Используется маленький subset: 600 examples.
+- Validation split получен из того же train split DUSHA.
+- Пока нет проверки на официальном `test.csv`.
+- Нет speaker/source-aware split, поэтому возможна утечка похожих голосов между train и validation.
+- Нейтральные и `other` примеры не участвуют в binary baseline.
+
+### Git
+
+```text
+9c16e46 Add sklearn audio baseline
+```
+
+## Следующие шаги
+
+1. Сделать `src/make_validation_sample.py` из `artifacts/predictions.csv`.
+2. Сформировать `artifacts/validation_sample.csv` на 20-30 примеров для Дианы.
+3. Добавить `run_notes.md` или генерировать краткий Markdown-отчёт по запуску.
+4. Прогнать baseline на большем subset, например 1000 examples/class.
+5. Добавить оценку на отдельном `test` split, чтобы получить более честную метрику.
+6. После sklearn baseline перейти к compact CNN на log-mel spectrogram.
