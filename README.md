@@ -78,6 +78,8 @@ python -m src.train_sklearn --subset-path data/processed/subset_binary.csv
 .venv/bin/python -m src.train_sklearn \
   --subset-path data/processed/subset_binary.csv \
   --artifacts-dir artifacts \
+  --run-name sklearn_logreg_binary_300 \
+  --model logreg \
   --test-size 0.2 \
   --seed 42
 ```
@@ -88,6 +90,20 @@ python -m src.train_sklearn --subset-path data/processed/subset_binary.csv
 accuracy: 0.7333
 macro F1: 0.7327
 validation rows: 120
+```
+
+Разные подходы нужно сохранять в отдельные run directories через `--run-name`,
+чтобы результаты не перетирали друг друга:
+
+```bash
+.venv/bin/python -m src.train_sklearn \
+  --subset-path data/processed/subset_binary.csv \
+  --artifacts-dir artifacts \
+  --run-name sklearn_random_forest_binary_300 \
+  --model random_forest \
+  --n-estimators 300 \
+  --test-size 0.2 \
+  --seed 42
 ```
 
 ## Роль Дианы

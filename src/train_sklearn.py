@@ -10,6 +10,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from sklearn.linear_model import LogisticRegression
+from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import (
     accuracy_score,
     classification_report,
@@ -21,6 +22,7 @@ from sklearn.metrics import (
 from sklearn.model_selection import train_test_split
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
+from sklearn.svm import SVC
 from tqdm import tqdm
 
 from .features import extract_feature_vector
@@ -36,7 +38,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--artifacts-dir",
         default="artifacts",
-        help="Directory where metrics and reports will be written.",
+        help="Base directory where metrics and reports will be written.",
+    )
+    parser.add_argument(
+        "--run-name",
+        default=None,
+        help="Optional run subdirectory under --artifacts-dir.",
+    )
+    parser.add_argument(
+        "--model",
+        choices=("logreg", "random_forest", "svm_rbf"),
+        default="logreg",
+        help="Sklearn model to train.",
     )
     parser.add_argument("--sample-rate", type=int, default=16_000)
     parser.add_argument(
@@ -48,6 +61,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--test-size", type=float, default=0.2)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--max-iter", type=int, default=1000)
+    parser.add_argument("--n-estimators", type=int, default=300)
     return parser.parse_args()
 
 
@@ -144,10 +158,51 @@ def prediction_confidence(model: object, features: np.ndarray) -> np.ndarray:
     return np.full(features.shape[0], np.nan)
 
 
+def build_model(args: argparse.Namespace) -> tuple[object, str]:
+    if args.model == "logreg":
+        return (
+            make_pipeline(
+                StandardScaler(),
+                LogisticRegression(
+                    max_iter=args.max_iter,
+                    class_weight="balanced",
+                    random_state=args.seed,
+                ),
+            ),
+            "StandardScaler + LogisticRegression",
+        )
+    if args.model == "random_forest":
+        return (
+            RandomForestClassifier(
+                n_estimators=args.n_estimators,
+                class_weight="balanced",
+                random_state=args.seed,
+                n_jobs=-1,
+            ),
+            "RandomForestClassifier",
+        )
+    if args.model == "svm_rbf":
+        return (
+            make_pipeline(
+                StandardScaler(),
+                SVC(
+                    kernel="rbf",
+                    class_weight="balanced",
+                    probability=True,
+                    random_state=args.seed,
+                ),
+            ),
+            "StandardScaler + SVC(kernel='rbf')",
+        )
+    raise ValueError(f"Unsupported model: {args.model}")
+
+
 def main() -> None:
     args = parse_args()
     subset_path = Path(args.subset_path)
     artifacts_dir = Path(args.artifacts_dir)
+    if args.run_name:
+        artifacts_dir = artifacts_dir / args.run_name
     artifacts_dir.mkdir(parents=True, exist_ok=True)
 
     max_duration = args.max_duration if args.max_duration > 0 else None
@@ -167,10 +222,7 @@ def main() -> None:
         stratify=labels,
     )
 
-    model = make_pipeline(
-        StandardScaler(),
-        LogisticRegression(max_iter=args.max_iter, class_weight="balanced"),
-    )
+    model, model_name = build_model(args)
     model.fit(train_x, train_y)
     predictions = model.predict(val_x)
     confidences = prediction_confidence(model, val_x)
@@ -187,13 +239,17 @@ def main() -> None:
         "max_duration": max_duration,
         "test_size": args.test_size,
         "seed": args.seed,
-        "model": "StandardScaler + LogisticRegression",
+        "model": model_name,
+        "model_key": args.model,
+        "run_name": args.run_name,
         "feature_count": int(features.shape[1]),
         "feature_names": feature_names,
         "accuracy": float(accuracy_score(val_y, predictions)),
-        "precision_macro": float(precision_score(val_y, predictions, average="macro")),
-        "recall_macro": float(recall_score(val_y, predictions, average="macro")),
-        "f1_macro": float(f1_score(val_y, predictions, average="macro")),
+        "precision_macro": float(
+            precision_score(val_y, predictions, average="macro", zero_division=0)
+        ),
+        "recall_macro": float(recall_score(val_y, predictions, average="macro", zero_division=0)),
+        "f1_macro": float(f1_score(val_y, predictions, average="macro", zero_division=0)),
         "classification_report": classification_report(
             val_y,
             predictions,

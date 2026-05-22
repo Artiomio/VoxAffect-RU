@@ -396,9 +396,123 @@ check: labels, пути к аудио, feature extraction и train/eval loop р�
 9c16e46 Add sklearn audio baseline
 ```
 
+## 2026-05-22 — Сравнение sklearn-подходов
+
+### Цель
+
+Проверить, даёт ли более сложный классический алгоритм прирост качества по
+сравнению с линейной логистической регрессией.
+
+### Организация артефактов
+
+Чтобы разные подходы не перетирали результаты друг друга, `src/train_sklearn.py`
+получил параметры:
+
+```text
+--model
+--run-name
+```
+
+Каждый запуск теперь можно сохранять в отдельный подкаталог:
+
+```text
+artifacts/sklearn_logreg_binary_300/
+artifacts/sklearn_random_forest_binary_300/
+artifacts/sklearn_svm_rbf_binary_300/
+```
+
+В каждом run directory сохраняются:
+
+```text
+metrics.json
+classification_report.txt
+confusion_matrix.png
+predictions.csv
+```
+
+### Данные и признаки
+
+Во всех запусках использовался один и тот же subset и один и тот же feature
+extractor:
+
+```text
+subset: data/processed/subset_binary.csv
+rows_total: 600
+train rows: 480
+validation rows: 120
+features: 48 hand-crafted audio features
+sample_rate: 16000
+max_duration: 6.0 sec
+test_size: 0.2
+seed: 42
+```
+
+### Команды
+
+```bash
+.venv/bin/python -m src.train_sklearn \
+  --subset-path data/processed/subset_binary.csv \
+  --artifacts-dir artifacts \
+  --run-name sklearn_logreg_binary_300 \
+  --model logreg \
+  --test-size 0.2 \
+  --seed 42
+
+.venv/bin/python -m src.train_sklearn \
+  --subset-path data/processed/subset_binary.csv \
+  --artifacts-dir artifacts \
+  --run-name sklearn_random_forest_binary_300 \
+  --model random_forest \
+  --n-estimators 300 \
+  --test-size 0.2 \
+  --seed 42
+
+.venv/bin/python -m src.train_sklearn \
+  --subset-path data/processed/subset_binary.csv \
+  --artifacts-dir artifacts \
+  --run-name sklearn_svm_rbf_binary_300 \
+  --model svm_rbf \
+  --test-size 0.2 \
+  --seed 42
+```
+
+### Результаты
+
+```text
+run                              model                              accuracy  macro F1
+sklearn_logreg_binary_300         StandardScaler + LogisticRegression  0.7333    0.7327
+sklearn_random_forest_binary_300  RandomForestClassifier               0.6667    0.6652
+sklearn_svm_rbf_binary_300        StandardScaler + SVC(kernel='rbf')   0.7333    0.7315
+```
+
+### Вывод
+
+На текущем маленьком binary subset более сложные алгоритмы не дали улучшения.
+Random Forest заметно хуже линейной логистической регрессии. RBF-SVM совпал по
+accuracy, но немного уступил по macro F1.
+
+На этом этапе логистическая регрессия остаётся основным sklearn baseline:
+она проще, быстрее интерпретируется и показывает не худшее качество среди
+проверенных классических моделей.
+
+### Ограничения
+
+- Все сравнения выполнены на одном маленьком subset `300/300`.
+- Feature extraction каждый раз повторяется; позже можно добавить feature cache.
+- Не проводился подбор гиперпараметров.
+- Пока нет оценки на отдельном DUSHA `test` split.
+
+### Следующий шаг
+
+Сформировать human validation sample из predictions лучшего/основного baseline:
+
+```text
+artifacts/sklearn_logreg_binary_300/predictions.csv
+```
+
 ## Следующие шаги
 
-1. Сделать `src/make_validation_sample.py` из `artifacts/predictions.csv`.
+1. Сделать `src/make_validation_sample.py` из `artifacts/sklearn_logreg_binary_300/predictions.csv`.
 2. Сформировать `artifacts/validation_sample.csv` на 20-30 примеров для Дианы.
 3. Добавить `run_notes.md` или генерировать краткий Markdown-отчёт по запуску.
 4. Прогнать baseline на большем subset, например 1000 examples/class.
