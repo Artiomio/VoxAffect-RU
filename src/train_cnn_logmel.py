@@ -38,6 +38,21 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--threshold-max", type=float, default=0.70)
     parser.add_argument("--threshold-step", type=float, default=0.02)
     parser.add_argument(
+        "--scheduler",
+        choices=("none", "reduce_on_plateau"),
+        default="none",
+        help="Optional learning-rate scheduler.",
+    )
+    parser.add_argument("--lr-factor", type=float, default=0.5)
+    parser.add_argument("--lr-patience", type=int, default=5)
+    parser.add_argument(
+        "--patience",
+        type=int,
+        default=0,
+        help="Early stopping patience by validation macro F1. Use 0 to disable.",
+    )
+    parser.add_argument("--min-delta", type=float, default=1e-4)
+    parser.add_argument(
         "--device",
         default="auto",
         choices=("auto", "cpu", "cuda"),
@@ -148,6 +163,10 @@ def predict(model: nn.Module, loader: DataLoader, device: torch.device) -> tuple
     return np.concatenate(predictions), np.vstack(probabilities)
 
 
+def current_learning_rate(optimizer: torch.optim.Optimizer) -> float:
+    return float(optimizer.param_groups[0]["lr"])
+
+
 def tune_threshold(
     labels: np.ndarray,
     positive_probabilities: np.ndarray,
@@ -230,13 +249,30 @@ def main() -> None:
         lr=args.learning_rate,
         weight_decay=args.weight_decay,
     )
+    scheduler = None
+    if args.scheduler == "reduce_on_plateau":
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer,
+            mode="min",
+            factor=args.lr_factor,
+            patience=args.lr_patience,
+        )
 
     history = []
     best_state = None
     best_val_accuracy = -1.0
+    best_val_f1_macro = -1.0
+    best_epoch = 0
+    epochs_without_improvement = 0
+    stopped_early = False
     for epoch in range(1, args.epochs + 1):
         train_loss, train_accuracy = run_epoch(model, train_loader, criterion, device, optimizer)
         val_loss, val_accuracy = run_epoch(model, val_loader, criterion, device)
+        val_predictions, _ = predict(model, val_loader, device)
+        val_scores = score_predictions(val_y, val_predictions)
+        val_f1_macro = float(val_scores["f1_macro"])
+        if scheduler is not None:
+            scheduler.step(val_loss)
         history.append(
             {
                 "epoch": epoch,
@@ -244,16 +280,31 @@ def main() -> None:
                 "train_accuracy": train_accuracy,
                 "val_loss": val_loss,
                 "val_accuracy": val_accuracy,
+                "val_precision_macro": val_scores["precision_macro"],
+                "val_recall_macro": val_scores["recall_macro"],
+                "val_f1_macro": val_f1_macro,
+                "learning_rate": current_learning_rate(optimizer),
             }
         )
         if val_accuracy > best_val_accuracy:
             best_val_accuracy = val_accuracy
+        if val_f1_macro > best_val_f1_macro + args.min_delta:
+            best_val_f1_macro = val_f1_macro
+            best_epoch = epoch
             best_state = {key: value.detach().cpu().clone() for key, value in model.state_dict().items()}
+            epochs_without_improvement = 0
+        else:
+            epochs_without_improvement += 1
         print(
             f"epoch {epoch:03d} "
             f"train_loss={train_loss:.4f} train_acc={train_accuracy:.4f} "
-            f"val_loss={val_loss:.4f} val_acc={val_accuracy:.4f}"
+            f"val_loss={val_loss:.4f} val_acc={val_accuracy:.4f} "
+            f"val_f1={val_f1_macro:.4f} lr={current_learning_rate(optimizer):.6f}"
         )
+        if args.patience > 0 and epochs_without_improvement >= args.patience:
+            stopped_early = True
+            print(f"early stopping at epoch {epoch:03d}; best_epoch={best_epoch:03d}")
+            break
 
     if best_state is not None:
         model.load_state_dict(best_state)
@@ -295,7 +346,16 @@ def main() -> None:
         "weight_decay": args.weight_decay,
         "dropout": args.dropout,
         "device": str(device),
+        "scheduler": args.scheduler,
+        "lr_factor": args.lr_factor,
+        "lr_patience": args.lr_patience,
+        "patience": args.patience,
+        "min_delta": args.min_delta,
+        "epochs_completed": len(history),
+        "stopped_early": stopped_early,
+        "best_epoch": best_epoch,
         "best_validation_accuracy": best_val_accuracy,
+        "best_validation_f1_macro": best_val_f1_macro,
         "threshold_grid": thresholds,
         "best_threshold": best_threshold,
         "history": history,

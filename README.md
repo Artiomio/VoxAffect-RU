@@ -154,20 +154,24 @@ python -m src.train_sklearn --subset-path data/processed/subset_binary.csv
   --features-path data/features/subset_binary_train_1000_logmel_3s_64mels.npz \
   --eval-features-path data/features/subset_binary_test_1000_logmel_3s_64mels.npz \
   --artifacts-dir artifacts \
-  --run-name cnn_logmel_binary_1000_threshold_tuned \
-  --epochs 20 \
+  --run-name cnn_logmel_binary_1000_60ep_f1_scheduler \
+  --epochs 60 \
   --batch-size 64 \
   --learning-rate 0.001 \
   --weight-decay 0.0001 \
   --dropout 0.25 \
+  --scheduler reduce_on_plateau \
+  --lr-factor 0.5 \
+  --lr-patience 5 \
+  --patience 12 \
   --seed 42
 
 .venv/bin/python -m src.compare_predictions \
   --left artifacts/sklearn_svm_rbf_binary_1000_tuned/predictions.csv \
   --left-name svm \
-  --right artifacts/cnn_logmel_binary_1000_threshold_tuned/predictions.csv \
-  --right-name cnn \
-  --output-dir artifacts/compare_svm_tuned_vs_cnn_logmel_threshold_tuned
+  --right artifacts/cnn_logmel_binary_1000_60ep_f1_scheduler/predictions.csv \
+  --right-name cnn60 \
+  --output-dir artifacts/compare_svm_tuned_vs_cnn_logmel_60ep_f1_scheduler
 
 .venv/bin/python -m src.make_validation_sample \
   --predictions-path artifacts/sklearn_logreg_binary_300/predictions.csv \
@@ -225,6 +229,19 @@ accuracy: 0.6155
 macro F1: 0.6107
 best threshold: 0.50
 comparison vs tuned SVM: both_correct 1003, svm_only_correct 437, cnn_only_correct 228, both_wrong 332
+```
+
+CNN с best checkpoint по validation macro F1, `ReduceLROnPlateau` и early
+stopping:
+
+```text
+run: cnn_logmel_binary_1000_60ep_f1_scheduler
+best epoch: 25
+epochs completed: 37 / 60
+accuracy: 0.6260
+macro F1: 0.6253
+best threshold: 0.50
+comparison vs tuned SVM: both_correct 1025, svm_only_correct 415, cnn60_only_correct 227, both_wrong 333
 ```
 
 Разные подходы нужно сохранять в отдельные run directories через `--run-name`,

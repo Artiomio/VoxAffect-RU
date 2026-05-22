@@ -1481,11 +1481,203 @@ artifacts/compare_svm_tuned_vs_cnn_logmel_threshold_tuned/cnn_only_correct.csv
 artifacts/compare_svm_tuned_vs_cnn_logmel_threshold_tuned/both_wrong.csv
 ```
 
+## 2026-05-22 — Longer CNN training with validation macro F1 checkpointing
+
+### Цель
+
+Проверить, недообучается ли первый CNN baseline, и улучшить training loop без
+изменения входного log-mel cache:
+
+- больше эпох: до `60`;
+- best checkpoint выбирать по validation macro F1, а не accuracy;
+- добавить `ReduceLROnPlateau`;
+- добавить early stopping по validation macro F1.
+
+### Изменения в коде
+
+Обновлен:
+
+```text
+src/train_cnn_logmel.py
+```
+
+Добавлено:
+
+```text
+--scheduler reduce_on_plateau
+--lr-factor
+--lr-patience
+--patience
+--min-delta
+```
+
+Training history теперь включает:
+
+```text
+val_precision_macro
+val_recall_macro
+val_f1_macro
+learning_rate
+```
+
+Модель сохраняется из лучшей эпохи по `val_f1_macro`.
+
+### Command
+
+```bash
+.venv/bin/python -m src.train_cnn_logmel \
+  --features-path data/features/subset_binary_train_1000_logmel_3s_64mels.npz \
+  --eval-features-path data/features/subset_binary_test_1000_logmel_3s_64mels.npz \
+  --artifacts-dir artifacts \
+  --run-name cnn_logmel_binary_1000_60ep_f1_scheduler \
+  --epochs 60 \
+  --batch-size 64 \
+  --learning-rate 0.001 \
+  --weight-decay 0.0001 \
+  --dropout 0.25 \
+  --scheduler reduce_on_plateau \
+  --lr-factor 0.5 \
+  --lr-patience 5 \
+  --patience 12 \
+  --seed 42
+```
+
+### Training result
+
+```text
+epochs completed: 37 / 60
+stopped early: true
+best epoch: 25
+best validation accuracy: 0.6225
+best validation macro F1: 0.6224
+best threshold: 0.50
+```
+
+Learning rate did not reduce during this run:
+
+```text
+final lr: 0.001
+```
+
+This means validation loss kept improving often enough for
+`ReduceLROnPlateau` not to trigger before early stopping by macro F1.
+
+### External test result
+
+```text
+              precision    recall  f1-score   support
+
+           0     0.6160    0.6690    0.6414      1000
+           1     0.6379    0.5830    0.6092      1000
+
+    accuracy                         0.6260      2000
+   macro avg     0.6269    0.6260    0.6253      2000
+weighted avg     0.6269    0.6260    0.6253      2000
+```
+
+Comparison to earlier CNN runs:
+
+```text
+first CNN macro F1:             0.6107
+CNN threshold tuned macro F1:   0.6107
+CNN 60ep scheduler macro F1:    0.6253
+```
+
+Improvement over first CNN:
+
+```text
+macro F1 +0.0146
+accuracy +0.0105
+```
+
+Comparison to tuned SVM:
+
+```text
+tuned RBF-SVM macro F1:         0.7195
+CNN 60ep scheduler macro F1:    0.6253
+gap:                            0.0942
+```
+
+### SVM/CNN comparison
+
+Command:
+
+```bash
+.venv/bin/python -m src.compare_predictions \
+  --left artifacts/sklearn_svm_rbf_binary_1000_tuned/predictions.csv \
+  --left-name svm \
+  --right artifacts/cnn_logmel_binary_1000_60ep_f1_scheduler/predictions.csv \
+  --right-name cnn60 \
+  --output-dir artifacts/compare_svm_tuned_vs_cnn_logmel_60ep_f1_scheduler
+```
+
+Overall:
+
+```text
+rows: 2000
+svm correct: 1440 / 2000 = 0.7200
+cnn60 correct: 1252 / 2000 = 0.6260
+
+both_correct:       1025
+svm_only_correct:   415
+cnn60_only_correct: 227
+both_wrong:         333
+```
+
+By target label:
+
+```text
+target 0:
+  both_correct:       511
+  svm_only_correct:   168
+  cnn60_only_correct: 158
+  both_wrong:         163
+
+target 1:
+  both_correct:       514
+  svm_only_correct:   247
+  cnn60_only_correct: 69
+  both_wrong:         170
+```
+
+### Вывод
+
+Увеличение числа эпох и выбор checkpoint по validation macro F1 помогли:
+
+```text
+0.6107 -> 0.6253 macro F1
+```
+
+Но это всё ещё не догоняет tuned SVM. При этом результат стал более
+сбалансированным по классам: recall positive class вырос с `0.5040` до
+`0.5830`, что для нашей задачи важно.
+
+CNN по-прежнему слабее всего там, где SVM хорошо ловит `target 1`. Следующий
+наиболее рациональный шаг: изменить input/архитектуру, а не просто крутить
+epochs дальше.
+
+### Artifacts
+
+```text
+artifacts/cnn_logmel_binary_1000_60ep_f1_scheduler/metrics.json
+artifacts/cnn_logmel_binary_1000_60ep_f1_scheduler/training_curves.csv
+artifacts/cnn_logmel_binary_1000_60ep_f1_scheduler/training_curves.png
+artifacts/cnn_logmel_binary_1000_60ep_f1_scheduler/threshold_results.csv
+artifacts/cnn_logmel_binary_1000_60ep_f1_scheduler/validation_predictions.csv
+artifacts/cnn_logmel_binary_1000_60ep_f1_scheduler/predictions.csv
+artifacts/cnn_logmel_binary_1000_60ep_f1_scheduler/model.pt
+
+artifacts/compare_svm_tuned_vs_cnn_logmel_60ep_f1_scheduler/summary.json
+artifacts/compare_svm_tuned_vs_cnn_logmel_60ep_f1_scheduler/comparison.csv
+artifacts/compare_svm_tuned_vs_cnn_logmel_60ep_f1_scheduler/comparison_by_label.csv
+```
+
 ## Следующие шаги
 
 1. Передать `artifacts/validation_sample_logreg_binary_300.csv` Диане на ручную проверку.
 2. Передать Диане папку `artifacts/validation_sample_logreg_binary_300_audio/`.
 3. После проверки внести агрегированные результаты в журнал.
 4. Добавить компактный `run_notes.md` generator для каждого run directory.
-5. Улучшить CNN: best epoch по validation macro F1, scheduler, longer duration.
-6. Подготовить для Дианы короткий набор `both_wrong` и `model_disagreement` аудио.
+5. Улучшить CNN input: `duration=6.0`, возможно `n_mels=80`.
+6. Попробовать более широкую CNN `32 -> 64 -> 128`.
+7. Подготовить для Дианы короткий набор `both_wrong` и `model_disagreement` аудио.
