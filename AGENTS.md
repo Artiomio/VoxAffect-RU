@@ -29,6 +29,30 @@ Prefer factual, reproducible entries over narrative prose. The log should make
 it possible to reconstruct thesis sections such as dataset description,
 methodology, baseline models, results, limitations, and future work.
 
+## Experiment Run Naming
+
+Every experiment that produces metrics must use a distinct `run-name` and write
+artifacts into a dedicated subdirectory, for example:
+
+```text
+artifacts/sklearn_logreg_binary_300/
+artifacts/sklearn_random_forest_binary_300/
+artifacts/sklearn_svm_rbf_binary_300/
+```
+
+Do not let different approaches overwrite the same `metrics.json`,
+`classification_report.txt`, `confusion_matrix.png`, or `predictions.csv`.
+
+When adding an experiment to `EXPERIMENT_LOG.md`, include a compact comparison
+table with at least:
+
+```text
+run | model | data/subset | key parameters | accuracy | macro F1 | interpretation
+```
+
+This table is the canonical source for later thesis text about experimental
+comparison.
+
 ## Current Project Direction
 
 The current MVP path is:
