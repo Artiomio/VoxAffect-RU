@@ -35,12 +35,13 @@ legacy/diana_legacy.json.ipynb
 Попросить Codex прочитать:
 
 ```text
+AGENTS.md
 PROJECT_PLAN.md
 CODEX_PROMPT.md
 START_CODEX_PROMPT.txt
 ```
 
-и начать с `src/inspect_dataset.py`.
+и продолжать работу с обязательным ведением `EXPERIMENT_LOG.md`.
 
 ## Минимальный стек
 
