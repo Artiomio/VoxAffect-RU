@@ -60,6 +60,21 @@ python -m src.make_subset --samples-per-class 200 --task binary
 python -m src.train_sklearn --subset-path data/processed/subset_binary.csv
 ```
 
+## Текущий локальный запуск
+
+Если DUSHA уже скачан и распакован в `data/dusha_emotion_audio/data`:
+
+```bash
+.venv/bin/python -m src.inspect_dataset --data-dir data/dusha_emotion_audio/data --split train --sample-size 20
+
+.venv/bin/python -m src.make_subset \
+  --data-dir data/dusha_emotion_audio/data \
+  --split train \
+  --task binary \
+  --samples-per-class 300 \
+  --output data/processed/subset_binary.csv
+```
+
 ## Роль Дианы
 
 Не ручная каторжная разметка, а человеческая проверка качества:
