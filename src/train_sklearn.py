@@ -33,7 +33,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--subset-path",
         default="data/processed/subset_binary.csv",
-        help="CSV created by src.make_subset.",
+        help="Training CSV created by src.make_subset.",
+    )
+    parser.add_argument(
+        "--eval-subset-path",
+        default=None,
+        help="Optional separate evaluation CSV. If set, train on all --subset-path rows.",
     )
     parser.add_argument(
         "--artifacts-dir",
@@ -197,6 +202,23 @@ def build_model(args: argparse.Namespace) -> tuple[object, str]:
     raise ValueError(f"Unsupported model: {args.model}")
 
 
+def score_predictions(labels: np.ndarray, predictions: np.ndarray) -> dict[str, object]:
+    return {
+        "accuracy": float(accuracy_score(labels, predictions)),
+        "precision_macro": float(
+            precision_score(labels, predictions, average="macro", zero_division=0)
+        ),
+        "recall_macro": float(recall_score(labels, predictions, average="macro", zero_division=0)),
+        "f1_macro": float(f1_score(labels, predictions, average="macro", zero_division=0)),
+        "classification_report": classification_report(
+            labels,
+            predictions,
+            output_dict=True,
+            zero_division=0,
+        ),
+    }
+
+
 def main() -> None:
     args = parse_args()
     subset_path = Path(args.subset_path)
@@ -213,26 +235,46 @@ def main() -> None:
         max_duration=max_duration,
     )
 
-    train_x, val_x, train_y, val_y, train_rows, val_rows = train_test_split(
-        features,
-        labels,
-        used_rows,
-        test_size=args.test_size,
-        random_state=args.seed,
-        stratify=labels,
-    )
+    eval_subset_path = Path(args.eval_subset_path) if args.eval_subset_path else None
+    if eval_subset_path:
+        eval_df = load_subset(eval_subset_path)
+        eval_features, eval_labels, _, eval_rows = build_feature_matrix(
+            eval_df,
+            sample_rate=args.sample_rate,
+            max_duration=max_duration,
+        )
+        train_x, val_x = features, eval_features
+        train_y, val_y = labels, eval_labels
+        train_rows, val_rows = used_rows, eval_rows
+        evaluation_mode = "external_eval_subset"
+    else:
+        train_x, val_x, train_y, val_y, train_rows, val_rows = train_test_split(
+            features,
+            labels,
+            used_rows,
+            test_size=args.test_size,
+            random_state=args.seed,
+            stratify=labels,
+        )
+        eval_df = None
+        evaluation_mode = "internal_train_validation_split"
 
     model, model_name = build_model(args)
     model.fit(train_x, train_y)
     predictions = model.predict(val_x)
     confidences = prediction_confidence(model, val_x)
 
-    class_names = [str(value) for value in sorted(pd.Series(labels).unique())]
+    class_names = [str(value) for value in sorted(pd.Series(np.concatenate([train_y, val_y])).unique())]
     report = classification_report(val_y, predictions, digits=4)
+    scores = score_predictions(val_y, predictions)
     metrics = {
         "subset_path": str(subset_path),
+        "eval_subset_path": str(eval_subset_path) if eval_subset_path else None,
+        "evaluation_mode": evaluation_mode,
         "rows_total": int(len(df)),
+        "eval_rows_total": int(len(eval_df)) if eval_df is not None else None,
         "rows_used": int(len(used_rows)),
+        "eval_rows_used": int(len(val_rows)) if eval_subset_path else None,
         "rows_train": int(len(train_y)),
         "rows_val": int(len(val_y)),
         "sample_rate": args.sample_rate,
@@ -244,18 +286,7 @@ def main() -> None:
         "run_name": args.run_name,
         "feature_count": int(features.shape[1]),
         "feature_names": feature_names,
-        "accuracy": float(accuracy_score(val_y, predictions)),
-        "precision_macro": float(
-            precision_score(val_y, predictions, average="macro", zero_division=0)
-        ),
-        "recall_macro": float(recall_score(val_y, predictions, average="macro", zero_division=0)),
-        "f1_macro": float(f1_score(val_y, predictions, average="macro", zero_division=0)),
-        "classification_report": classification_report(
-            val_y,
-            predictions,
-            output_dict=True,
-            zero_division=0,
-        ),
+        **scores,
     }
 
     (artifacts_dir / "classification_report.txt").write_text(report, encoding="utf-8")

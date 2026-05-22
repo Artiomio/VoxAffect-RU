@@ -695,6 +695,127 @@ original_audio_path
   только скрипт, команда и описание результата.
 - После ручной проверки нужно отдельно сохранить агрегированные итоги в журнале.
 
+## 2026-05-22 — External test split evaluation
+
+### Цель
+
+Получить более честную оценку основного sklearn baseline: обучить модель на
+balanced subset из DUSHA `train` split и оценить на отдельном balanced subset из
+DUSHA `test` split.
+
+Это важнее, чем метрика на internal validation split, потому что internal
+validation был получен из того же `train.csv`.
+
+### Изменения в коде
+
+`src/train_sklearn.py` получил параметр:
+
+```text
+--eval-subset-path
+```
+
+Если он указан, модель обучается на всех строках `--subset-path`, а оценивается
+на отдельном eval CSV.
+
+### Подготовка test subset
+
+Команда:
+
+```bash
+.venv/bin/python -m src.make_subset \
+  --data-dir data/dusha_emotion_audio/data \
+  --split test \
+  --task binary \
+  --samples-per-class 300 \
+  --output data/processed/subset_binary_test.csv
+```
+
+Результат:
+
+```text
+input: data/dusha_emotion_audio/data/test.csv
+target_label 0: 300
+target_label 1: 300
+total: 600
+```
+
+### External eval command
+
+```bash
+.venv/bin/python -m src.train_sklearn \
+  --subset-path data/processed/subset_binary.csv \
+  --eval-subset-path data/processed/subset_binary_test.csv \
+  --artifacts-dir artifacts \
+  --run-name sklearn_logreg_binary_300_test_eval \
+  --model logreg \
+  --seed 42
+```
+
+### Данные
+
+```text
+train subset: data/processed/subset_binary.csv
+train rows: 600
+eval subset: data/processed/subset_binary_test.csv
+eval rows: 600
+features: 48 hand-crafted audio features
+sample_rate: 16000
+max_duration: 6.0 sec
+model: StandardScaler + LogisticRegression
+```
+
+### Результаты
+
+```text
+accuracy:        0.6967
+precision_macro: 0.6967
+recall_macro:    0.6967
+f1_macro:        0.6966
+```
+
+Classification report:
+
+```text
+              precision    recall  f1-score   support
+
+           0     0.6928    0.7067    0.6997       300
+           1     0.7007    0.6867    0.6936       300
+
+    accuracy                         0.6967       600
+   macro avg     0.6967    0.6967    0.6966       600
+weighted avg     0.6967    0.6967    0.6966       600
+```
+
+Artifacts:
+
+```text
+artifacts/sklearn_logreg_binary_300_test_eval/metrics.json
+artifacts/sklearn_logreg_binary_300_test_eval/classification_report.txt
+artifacts/sklearn_logreg_binary_300_test_eval/confusion_matrix.png
+artifacts/sklearn_logreg_binary_300_test_eval/predictions.csv
+```
+
+### Вывод
+
+На отдельном DUSHA `test` split качество ниже, чем на internal validation:
+
+```text
+internal validation macro F1: 0.7327
+external test macro F1:      0.6966
+```
+
+Это ожидаемое и важное уточнение: internal validation был менее строгим
+измерением. Для диплома external test split следует считать более честной
+оценкой текущего sklearn baseline.
+
+### Ограничения
+
+- Используется balanced test subset `300/300`, а не весь test split.
+- Нет проверки speaker/source leakage.
+- Нет подбора гиперпараметров.
+- Feature extraction повторяется при каждом запуске; нужен feature cache для
+  больших экспериментов.
+
 ## Следующие шаги
 
 1. Передать `artifacts/validation_sample_logreg_binary_300.csv` Диане на ручную проверку.
@@ -702,5 +823,5 @@ original_audio_path
 3. После проверки внести агрегированные результаты в журнал.
 4. Добавить `run_notes.md` или генерировать краткий Markdown-отчёт по запуску.
 5. Прогнать baseline на большем subset, например 1000 examples/class.
-6. Добавить оценку на отдельном `test` split, чтобы получить более честную метрику.
+6. Добавить feature cache, чтобы не пересчитывать librosa features при каждом запуске.
 7. После sklearn baseline перейти к compact CNN на log-mel spectrogram.

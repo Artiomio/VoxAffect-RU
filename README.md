@@ -75,12 +75,27 @@ python -m src.train_sklearn --subset-path data/processed/subset_binary.csv
   --samples-per-class 300 \
   --output data/processed/subset_binary.csv
 
+.venv/bin/python -m src.make_subset \
+  --data-dir data/dusha_emotion_audio/data \
+  --split test \
+  --task binary \
+  --samples-per-class 300 \
+  --output data/processed/subset_binary_test.csv
+
 .venv/bin/python -m src.train_sklearn \
   --subset-path data/processed/subset_binary.csv \
   --artifacts-dir artifacts \
   --run-name sklearn_logreg_binary_300 \
   --model logreg \
   --test-size 0.2 \
+  --seed 42
+
+.venv/bin/python -m src.train_sklearn \
+  --subset-path data/processed/subset_binary.csv \
+  --eval-subset-path data/processed/subset_binary_test.csv \
+  --artifacts-dir artifacts \
+  --run-name sklearn_logreg_binary_300_test_eval \
+  --model logreg \
   --seed 42
 
 .venv/bin/python -m src.make_validation_sample \
@@ -102,6 +117,14 @@ python -m src.train_sklearn --subset-path data/processed/subset_binary.csv
 accuracy: 0.7333
 macro F1: 0.7327
 validation rows: 120
+```
+
+Честная оценка на отдельном balanced subset из DUSHA `test` split:
+
+```text
+accuracy: 0.6967
+macro F1: 0.6966
+test rows: 600
 ```
 
 Разные подходы нужно сохранять в отдельные run directories через `--run-name`,
