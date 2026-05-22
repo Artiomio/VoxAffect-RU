@@ -26,6 +26,19 @@ PyTorch лучше ставить отдельно под конкретную �
 - Language: Python
 - Compute Platform: CPU
 
+В текущем CPU-окружении проекта использовалась команда:
+
+```bash
+.venv/bin/python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+```
+
+Проверенный результат:
+
+```text
+torch 2.12.0+cpu
+cuda False
+```
+
 ### `existo` с RTX 3060
 
 Перед установкой:

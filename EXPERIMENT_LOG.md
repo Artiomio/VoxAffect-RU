@@ -1105,11 +1105,221 @@ artifacts/sklearn_svm_rbf_binary_1000_tuned/predictions.csv
 - Улучшение SVM маленькое; его стоит трактовать как incremental baseline, а не
   как качественный прорыв.
 
+## 2026-05-22 — First compact CNN on log-mel spectrograms
+
+### Цель
+
+Перейти от classical ML baseline на summary audio features к neural baseline,
+который получает на вход спектральное представление звука:
+
+```text
+audio -> log-mel spectrogram -> compact CNN -> binary emotion prediction
+```
+
+Это соответствует исходной идее проекта: сверточная сеть работает не с
+ручными средними/стандартными отклонениями, а с двумерной time-frequency
+картой.
+
+### Environment
+
+PyTorch был установлен отдельно в проектное `.venv`:
+
+```bash
+.venv/bin/python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+```
+
+Проверка:
+
+```text
+torch 2.12.0+cpu
+cuda False
+```
+
+Обучение выполнялось на CPU.
+
+### Изменения в коде
+
+Добавлены:
+
+```text
+src/build_logmel_cache.py
+src/logmel_cache.py
+src/train_cnn_logmel.py
+```
+
+`src/build_logmel_cache.py` строит `.npz` cache с log-mel tensors, чтобы CNN
+запуски не перечитывали WAV каждый раз.
+
+`src/train_cnn_logmel.py` обучает compact CNN, сохраняет:
+
+```text
+metrics.json
+classification_report.txt
+confusion_matrix.png
+training_curves.png
+training_curves.csv
+predictions.csv
+model.pt
+```
+
+### Log-mel cache
+
+Train cache:
+
+```bash
+.venv/bin/python -m src.build_logmel_cache \
+  --subset-path data/processed/subset_binary_train_1000.csv \
+  --output data/features/subset_binary_train_1000_logmel_3s_64mels.npz \
+  --sample-rate 16000 \
+  --duration 3.0 \
+  --n-mels 64
+```
+
+Test cache:
+
+```bash
+.venv/bin/python -m src.build_logmel_cache \
+  --subset-path data/processed/subset_binary_test_1000.csv \
+  --output data/features/subset_binary_test_1000_logmel_3s_64mels.npz \
+  --sample-rate 16000 \
+  --duration 3.0 \
+  --n-mels 64
+```
+
+Result:
+
+```text
+train shape: (2000, 64, 94), float32
+test shape:  (2000, 64, 94), float32
+train cache size: 40M
+test cache size:  40M
+```
+
+### Architecture
+
+Input tensor:
+
+```text
+1 x 64 x 94
+```
+
+Model:
+
+```text
+Conv2d(1 -> 16, kernel=3x3, padding=1)
+BatchNorm2d(16)
+ReLU
+MaxPool2d(2)
+Dropout2d(0.125)
+
+Conv2d(16 -> 32, kernel=3x3, padding=1)
+BatchNorm2d(32)
+ReLU
+MaxPool2d(2)
+Dropout2d(0.25)
+
+Conv2d(32 -> 64, kernel=3x3, padding=1)
+BatchNorm2d(64)
+ReLU
+AdaptiveAvgPool2d(1x1)
+
+Flatten
+Dropout(0.25)
+Linear(64 -> 2)
+```
+
+### Training command
+
+```bash
+.venv/bin/python -m src.train_cnn_logmel \
+  --features-path data/features/subset_binary_train_1000_logmel_3s_64mels.npz \
+  --eval-features-path data/features/subset_binary_test_1000_logmel_3s_64mels.npz \
+  --artifacts-dir artifacts \
+  --run-name cnn_logmel_binary_1000_test_eval \
+  --epochs 20 \
+  --batch-size 64 \
+  --learning-rate 0.001 \
+  --weight-decay 0.0001 \
+  --dropout 0.25 \
+  --seed 42
+```
+
+Training split:
+
+```text
+train rows: 1600
+validation rows: 400
+external test rows: 2000
+```
+
+Best validation accuracy:
+
+```text
+0.6225
+```
+
+### Results
+
+External test:
+
+```text
+              precision    recall  f1-score   support
+
+           0     0.5944    0.7270    0.6541      1000
+           1     0.6486    0.5040    0.5672      1000
+
+    accuracy                         0.6155      2000
+   macro avg     0.6215    0.6155    0.6107      2000
+weighted avg     0.6215    0.6155    0.6107      2000
+```
+
+Comparison with current best sklearn baseline:
+
+```text
+tuned RBF-SVM macro F1: 0.7195
+first CNN macro F1:     0.6107
+```
+
+### Вывод
+
+Первый CNN baseline работает end-to-end: есть log-mel cache, PyTorch training,
+training curves, confusion matrix, predictions и сохраненный `model.pt`.
+
+Качество пока ниже sklearn baseline. Это ожидаемо для первого neural run:
+архитектура маленькая, обучение на CPU, только 2000 train examples, без
+augmentation, scheduler, threshold tuning и подбора длительности/размера
+mel-представления.
+
+Ценность этого шага не в победе над SVM, а в том, что neural pipeline теперь
+существует и его можно улучшать воспроизводимо.
+
+### Artifacts
+
+```text
+artifacts/cnn_logmel_binary_1000_test_eval/metrics.json
+artifacts/cnn_logmel_binary_1000_test_eval/classification_report.txt
+artifacts/cnn_logmel_binary_1000_test_eval/confusion_matrix.png
+artifacts/cnn_logmel_binary_1000_test_eval/training_curves.png
+artifacts/cnn_logmel_binary_1000_test_eval/training_curves.csv
+artifacts/cnn_logmel_binary_1000_test_eval/predictions.csv
+artifacts/cnn_logmel_binary_1000_test_eval/model.pt
+```
+
+### Ограничения
+
+- CPU-only training.
+- Только 3 секунды аудио на пример.
+- Нет data augmentation.
+- Нет learning-rate scheduler.
+- Нет early stopping по macro F1.
+- Нет threshold tuning для CNN probabilities.
+- CNN пока использует простой `argmax`, а не оптимизированный threshold.
+
 ## Следующие шаги
 
 1. Передать `artifacts/validation_sample_logreg_binary_300.csv` Диане на ручную проверку.
 2. Передать Диане папку `artifacts/validation_sample_logreg_binary_300_audio/`.
 3. После проверки внести агрегированные результаты в журнал.
 4. Добавить компактный `run_notes.md` generator для каждого run directory.
-5. Сравнить ошибки лучшего tuned SVM с validation sample для ручной проверки.
-6. После sklearn baseline перейти к compact CNN на log-mel spectrogram.
+5. Сравнить ошибки лучшего tuned SVM и первого CNN на одном test subset.
+6. Улучшить CNN: scheduler, threshold tuning, longer duration, augmentation.

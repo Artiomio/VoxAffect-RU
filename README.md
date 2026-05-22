@@ -136,6 +136,32 @@ python -m src.train_sklearn --subset-path data/processed/subset_binary.csv
   --model svm_rbf \
   --seed 42
 
+.venv/bin/python -m src.build_logmel_cache \
+  --subset-path data/processed/subset_binary_train_1000.csv \
+  --output data/features/subset_binary_train_1000_logmel_3s_64mels.npz \
+  --sample-rate 16000 \
+  --duration 3.0 \
+  --n-mels 64
+
+.venv/bin/python -m src.build_logmel_cache \
+  --subset-path data/processed/subset_binary_test_1000.csv \
+  --output data/features/subset_binary_test_1000_logmel_3s_64mels.npz \
+  --sample-rate 16000 \
+  --duration 3.0 \
+  --n-mels 64
+
+.venv/bin/python -m src.train_cnn_logmel \
+  --features-path data/features/subset_binary_train_1000_logmel_3s_64mels.npz \
+  --eval-features-path data/features/subset_binary_test_1000_logmel_3s_64mels.npz \
+  --artifacts-dir artifacts \
+  --run-name cnn_logmel_binary_1000_test_eval \
+  --epochs 20 \
+  --batch-size 64 \
+  --learning-rate 0.001 \
+  --weight-decay 0.0001 \
+  --dropout 0.25 \
+  --seed 42
+
 .venv/bin/python -m src.make_validation_sample \
   --predictions-path artifacts/sklearn_logreg_binary_300/predictions.csv \
   --output artifacts/validation_sample_logreg_binary_300.csv \
@@ -181,6 +207,15 @@ LogisticRegression tuned: accuracy 0.7165, macro F1 0.7157
 
 RBF-SVM tuned:            accuracy 0.7200, macro F1 0.7195
   best validation: C=10.0, gamma=0.003, class_weight=balanced, threshold=0.46
+```
+
+Первый compact CNN на log-mel spectrograms:
+
+```text
+input: 1 x 64 x 94
+architecture: Conv2d 16 -> 32 -> 64, BatchNorm, ReLU, MaxPool, AdaptiveAvgPool
+accuracy: 0.6155
+macro F1: 0.6107
 ```
 
 Разные подходы нужно сохранять в отдельные run directories через `--run-name`,
