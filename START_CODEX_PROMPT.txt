@@ -1,0 +1,37 @@
+Привет! В проекте лежат `PROJECT_PLAN.md` и `CODEX_PROMPT.md`. Прочитай их и начни с самого первого безопасного шага.
+
+Важно: не обучай модель сразу и не устанавливай тяжёлую CUDA-машинерию без необходимости. Сначала создай минимальную структуру проекта и скрипт `src/inspect_dataset.py`.
+
+Контекст:
+- legacy notebook Дианы уже лежит тут: `legacy/diana_legacy.json.ipynb`;
+- это полезный каркас, но не финальный эксперимент: там dummy/noise audio и случайные метки;
+- наша задача — аккуратно заменить dummy data на маленький subset DUSHA.
+
+Задача первого шага:
+1. Создай/проверь структуру:
+   - `src/`
+   - `data/`
+   - `artifacts/`
+   - `notebooks/`
+   - `legacy/`
+2. Создай `src/inspect_dataset.py`.
+3. Скрипт должен уметь проверить структуру `KELONMYOSA/dusha_emotion_audio` или локально скачанного датасета:
+   - split'ы;
+   - имена колонок;
+   - пример первой записи;
+   - структуру audio-поля;
+   - возможные значения emotion/label;
+   - короткую статистику длительностей на маленькой выборке.
+4. Не скачивай весь датасет без необходимости.
+5. Сделай параметры:
+   - `--dataset-name`
+   - `--data-dir` / `--local-path`, если разумно
+   - `--split`
+   - `--sample-size`
+6. Добавь `requirements.txt` с минимальными зависимостями без PyTorch/CUDA, если он ещё не нужен для inspection.
+7. После изменений покажи команду запуска inspection.
+
+Первое, что хочется получить:
+```bash
+python -m src.inspect_dataset --dataset-name KELONMYOSA/dusha_emotion_audio --split train --sample-size 20
+```
