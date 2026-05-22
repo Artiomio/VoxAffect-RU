@@ -619,11 +619,88 @@ good example for thesis
   строгой экспертной оценки.
 - Проверка пока не выполнена человеком; поля `human_*` пустые.
 
+## 2026-05-22 — Export validation sample for Diana
+
+### Цель
+
+Сделать human validation sample удобным для ручного прослушивания: не заставлять
+Диану искать длинные исходные пути в `data/dusha_emotion_audio`, а дать одну
+папку с WAV-файлами и таблицей для заполнения.
+
+### Скрипт
+
+```text
+src/export_validation_sample.py
+```
+
+### Входные данные
+
+```text
+sample: artifacts/validation_sample_logreg_binary_300.csv
+rows: 30
+```
+
+### Команда
+
+```bash
+.venv/bin/python -m src.export_validation_sample \
+  --sample-path artifacts/validation_sample_logreg_binary_300.csv \
+  --output-dir artifacts/validation_sample_logreg_binary_300_audio \
+  --overwrite
+```
+
+### Результат
+
+```text
+output_dir: artifacts/validation_sample_logreg_binary_300_audio
+copied_audio: 30
+missing_audio: 0
+size: 4.5M
+```
+
+В папке созданы:
+
+```text
+review_sheet.csv
+README.md
+001_ok_true-1_pred-1_src-positive_conf-0.77.wav
+002_ok_true-0_pred-0_src-sad_conf-0.62.wav
+...
+```
+
+`review_sheet.csv` содержит относительное имя аудиофайла и поля для заполнения:
+
+```text
+audio_file
+source_label
+target_label
+predicted_label
+confidence
+is_correct
+human_label
+human_comment
+review_status
+notes
+original_audio_path
+```
+
+### Вывод
+
+Подготовлен компактный пакет для ручной экспертной проверки. Его можно передать
+Диане как одну папку: она слушает WAV-файлы и заполняет `review_sheet.csv`.
+
+### Ограничения
+
+- Экспортная папка находится в ignored `artifacts/`, поэтому в git фиксируются
+  только скрипт, команда и описание результата.
+- После ручной проверки нужно отдельно сохранить агрегированные итоги в журнале.
+
 ## Следующие шаги
 
 1. Передать `artifacts/validation_sample_logreg_binary_300.csv` Диане на ручную проверку.
-2. После проверки внести агрегированные результаты в журнал.
-3. Добавить `run_notes.md` или генерировать краткий Markdown-отчёт по запуску.
-4. Прогнать baseline на большем subset, например 1000 examples/class.
-5. Добавить оценку на отдельном `test` split, чтобы получить более честную метрику.
-6. После sklearn baseline перейти к compact CNN на log-mel spectrogram.
+2. Передать Диане папку `artifacts/validation_sample_logreg_binary_300_audio/`.
+3. После проверки внести агрегированные результаты в журнал.
+4. Добавить `run_notes.md` или генерировать краткий Markdown-отчёт по запуску.
+5. Прогнать baseline на большем subset, например 1000 examples/class.
+6. Добавить оценку на отдельном `test` split, чтобы получить более честную метрику.
+7. После sklearn baseline перейти к compact CNN на log-mel spectrogram.

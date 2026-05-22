@@ -89,6 +89,11 @@ python -m src.train_sklearn --subset-path data/processed/subset_binary.csv
   --n 30 \
   --strategy mixed \
   --seed 42
+
+.venv/bin/python -m src.export_validation_sample \
+  --sample-path artifacts/validation_sample_logreg_binary_300.csv \
+  --output-dir artifacts/validation_sample_logreg_binary_300_audio \
+  --overwrite
 ```
 
 Первый sklearn baseline на `subset_binary.csv`:
@@ -132,3 +137,11 @@ artifacts/validation_sample_logreg_binary_300.csv
 ```text
 human_label,human_comment,review_status,notes
 ```
+
+Для удобной ручной проверки аудио экспортируется в отдельную папку:
+
+```text
+artifacts/validation_sample_logreg_binary_300_audio/
+```
+
+Внутри лежат 30 `.wav` с читаемыми именами и `review_sheet.csv`.
