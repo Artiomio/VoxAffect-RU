@@ -1315,11 +1315,177 @@ artifacts/cnn_logmel_binary_1000_test_eval/model.pt
 - Нет threshold tuning для CNN probabilities.
 - CNN пока использует простой `argmax`, а не оптимизированный threshold.
 
+## 2026-05-22 — CNN threshold tuning and SVM/CNN error comparison
+
+### Цель
+
+Проверить два вопроса без изменения dataset split:
+
+1. Поможет ли CNN простой probability threshold tuning.
+2. Насколько ошибки CNN и лучшего tuned SVM пересекаются на одном external test
+   subset.
+
+### Изменения в коде
+
+Обновлен:
+
+```text
+src/train_cnn_logmel.py
+```
+
+Добавлено:
+
+```text
+src/compare_predictions.py
+```
+
+`src/train_cnn_logmel.py` теперь:
+
+- сохраняет `validation_predictions.csv`;
+- перебирает thresholds `0.30..0.70` на validation probabilities;
+- выбирает threshold по validation macro F1;
+- применяет выбранный threshold на external test;
+- сохраняет `threshold_results.csv`.
+
+`src/compare_predictions.py` объединяет два `predictions.csv` по `audio_path` и
+сохраняет категории:
+
+```text
+both_correct
+svm_only_correct
+cnn_only_correct
+both_wrong
+```
+
+### Commands
+
+CNN with validation threshold tuning:
+
+```bash
+.venv/bin/python -m src.train_cnn_logmel \
+  --features-path data/features/subset_binary_train_1000_logmel_3s_64mels.npz \
+  --eval-features-path data/features/subset_binary_test_1000_logmel_3s_64mels.npz \
+  --artifacts-dir artifacts \
+  --run-name cnn_logmel_binary_1000_threshold_tuned \
+  --epochs 20 \
+  --batch-size 64 \
+  --learning-rate 0.001 \
+  --weight-decay 0.0001 \
+  --dropout 0.25 \
+  --seed 42
+```
+
+SVM vs CNN comparison:
+
+```bash
+.venv/bin/python -m src.compare_predictions \
+  --left artifacts/sklearn_svm_rbf_binary_1000_tuned/predictions.csv \
+  --left-name svm \
+  --right artifacts/cnn_logmel_binary_1000_threshold_tuned/predictions.csv \
+  --right-name cnn \
+  --output-dir artifacts/compare_svm_tuned_vs_cnn_logmel_threshold_tuned
+```
+
+### Threshold tuning result
+
+Best validation threshold:
+
+```text
+threshold: 0.50
+validation accuracy: 0.6225
+validation macro F1: 0.6216
+```
+
+External test:
+
+```text
+accuracy: 0.6155
+macro F1: 0.6107
+```
+
+Threshold tuning did not improve the first CNN run because the best validation
+threshold was the default `0.50`.
+
+### SVM/CNN comparison
+
+Compared runs:
+
+```text
+svm: artifacts/sklearn_svm_rbf_binary_1000_tuned/predictions.csv
+cnn: artifacts/cnn_logmel_binary_1000_threshold_tuned/predictions.csv
+```
+
+Overall:
+
+```text
+rows: 2000
+svm correct: 1440 / 2000 = 0.7200
+cnn correct: 1231 / 2000 = 0.6155
+
+both_correct:     1003
+svm_only_correct: 437
+cnn_only_correct: 228
+both_wrong:       332
+```
+
+By target label:
+
+```text
+target 0:
+  both_correct:     556
+  svm_only_correct: 123
+  cnn_only_correct: 171
+  both_wrong:       150
+
+target 1:
+  both_correct:     447
+  svm_only_correct: 314
+  cnn_only_correct: 57
+  both_wrong:       182
+```
+
+### Вывод
+
+CNN пока особенно проигрывает SVM на positive class (`target 1`):
+
+```text
+svm_only_correct on target 1: 314
+cnn_only_correct on target 1: 57
+```
+
+При этом CNN не бесполезен: есть 228 примеров, где CNN прав, а SVM ошибается.
+Это значит, что модель видит часть сигналов иначе, но текущая архитектура и
+training setup пока не извлекают из log-mel представления достаточно устойчивые
+признаки.
+
+Практический следующий шаг для CNN:
+
+- выбирать best epoch по validation macro F1, а не accuracy;
+- добавить scheduler;
+- попробовать более длинный input, например `duration=6.0`;
+- затем попробовать чуть более широкую CNN `32 -> 64 -> 128`.
+
+### Artifacts
+
+```text
+artifacts/cnn_logmel_binary_1000_threshold_tuned/metrics.json
+artifacts/cnn_logmel_binary_1000_threshold_tuned/threshold_results.csv
+artifacts/cnn_logmel_binary_1000_threshold_tuned/validation_predictions.csv
+artifacts/cnn_logmel_binary_1000_threshold_tuned/predictions.csv
+
+artifacts/compare_svm_tuned_vs_cnn_logmel_threshold_tuned/summary.json
+artifacts/compare_svm_tuned_vs_cnn_logmel_threshold_tuned/comparison.csv
+artifacts/compare_svm_tuned_vs_cnn_logmel_threshold_tuned/comparison_by_label.csv
+artifacts/compare_svm_tuned_vs_cnn_logmel_threshold_tuned/svm_only_correct.csv
+artifacts/compare_svm_tuned_vs_cnn_logmel_threshold_tuned/cnn_only_correct.csv
+artifacts/compare_svm_tuned_vs_cnn_logmel_threshold_tuned/both_wrong.csv
+```
+
 ## Следующие шаги
 
 1. Передать `artifacts/validation_sample_logreg_binary_300.csv` Диане на ручную проверку.
 2. Передать Диане папку `artifacts/validation_sample_logreg_binary_300_audio/`.
 3. После проверки внести агрегированные результаты в журнал.
 4. Добавить компактный `run_notes.md` generator для каждого run directory.
-5. Сравнить ошибки лучшего tuned SVM и первого CNN на одном test subset.
-6. Улучшить CNN: scheduler, threshold tuning, longer duration, augmentation.
+5. Улучшить CNN: best epoch по validation macro F1, scheduler, longer duration.
+6. Подготовить для Дианы короткий набор `both_wrong` и `model_disagreement` аудио.

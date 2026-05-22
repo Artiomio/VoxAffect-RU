@@ -18,6 +18,7 @@ from torch.utils.data import DataLoader, TensorDataset
 
 from .logmel_cache import load_logmel_cache
 from .train_sklearn import save_confusion_matrix, score_predictions
+from .tune_sklearn import predictions_at_threshold, threshold_values
 
 
 def parse_args() -> argparse.Namespace:
@@ -33,6 +34,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dropout", type=float, default=0.25)
     parser.add_argument("--test-size", type=float, default=0.2)
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--threshold-min", type=float, default=0.30)
+    parser.add_argument("--threshold-max", type=float, default=0.70)
+    parser.add_argument("--threshold-step", type=float, default=0.02)
     parser.add_argument(
         "--device",
         default="auto",
@@ -144,6 +148,38 @@ def predict(model: nn.Module, loader: DataLoader, device: torch.device) -> tuple
     return np.concatenate(predictions), np.vstack(probabilities)
 
 
+def tune_threshold(
+    labels: np.ndarray,
+    positive_probabilities: np.ndarray,
+    thresholds: list[float],
+) -> tuple[dict[str, float], list[dict[str, float]]]:
+    rows = []
+    best = None
+    for threshold in thresholds:
+        predictions = predictions_at_threshold(positive_probabilities, threshold)
+        scores = score_predictions(labels, predictions)
+        row = {
+            "threshold": threshold,
+            "validation_accuracy": scores["accuracy"],
+            "validation_precision_macro": scores["precision_macro"],
+            "validation_recall_macro": scores["recall_macro"],
+            "validation_f1_macro": scores["f1_macro"],
+        }
+        rows.append(row)
+        if best is None or (
+            row["validation_f1_macro"],
+            row["validation_accuracy"],
+        ) > (
+            best["validation_f1_macro"],
+            best["validation_accuracy"],
+        ):
+            best = row
+
+    if best is None:
+        raise SystemExit("No threshold candidates were evaluated.")
+    return best, rows
+
+
 def save_history(history: list[dict[str, float]], output_path: Path) -> None:
     if not history:
         return
@@ -174,9 +210,10 @@ def main() -> None:
 
     features, labels, rows, train_metadata = load_logmel_cache(args.features_path)
     eval_features, eval_labels, eval_rows, eval_metadata = load_logmel_cache(args.eval_features_path)
-    train_x, val_x, train_y, val_y = train_test_split(
+    train_x, val_x, train_y, val_y, train_rows, val_rows = train_test_split(
         features,
         labels,
+        rows,
         test_size=args.test_size,
         random_state=args.seed,
         stratify=labels,
@@ -221,7 +258,19 @@ def main() -> None:
     if best_state is not None:
         model.load_state_dict(best_state)
 
-    eval_predictions, eval_probabilities = predict(model, eval_loader, device)
+    val_predictions, val_probabilities = predict(model, val_loader, device)
+    thresholds = threshold_values(args.threshold_min, args.threshold_max, args.threshold_step)
+    best_threshold, threshold_rows = tune_threshold(
+        val_y,
+        val_probabilities[:, 1],
+        thresholds,
+    )
+
+    eval_argmax_predictions, eval_probabilities = predict(model, eval_loader, device)
+    eval_predictions = predictions_at_threshold(
+        eval_probabilities[:, 1],
+        best_threshold["threshold"],
+    )
     eval_scores = score_predictions(eval_labels, eval_predictions)
     report = classification_report(eval_labels, eval_predictions, digits=4)
     class_names = [str(value) for value in sorted(np.unique(np.concatenate([labels, eval_labels])))]
@@ -247,10 +296,13 @@ def main() -> None:
         "dropout": args.dropout,
         "device": str(device),
         "best_validation_accuracy": best_val_accuracy,
+        "threshold_grid": thresholds,
+        "best_threshold": best_threshold,
         "history": history,
         **eval_scores,
     }
 
+    pd.DataFrame(threshold_rows).to_csv(artifacts_dir / "threshold_results.csv", index=False)
     (artifacts_dir / "classification_report.txt").write_text(report, encoding="utf-8")
     (artifacts_dir / "metrics.json").write_text(
         json.dumps(metrics, ensure_ascii=False, indent=2),
@@ -267,12 +319,24 @@ def main() -> None:
 
     predictions_df = eval_rows.copy()
     predictions_df["predicted_label"] = eval_predictions
+    predictions_df["argmax_predicted_label"] = eval_argmax_predictions
     predictions_df["confidence"] = eval_probabilities.max(axis=1)
     predictions_df["positive_probability"] = eval_probabilities[:, 1]
     predictions_df.to_csv(artifacts_dir / "predictions.csv", index=False)
 
+    validation_predictions_df = val_rows.copy()
+    validation_predictions_df["predicted_label"] = predictions_at_threshold(
+        val_probabilities[:, 1],
+        best_threshold["threshold"],
+    )
+    validation_predictions_df["argmax_predicted_label"] = val_predictions
+    validation_predictions_df["confidence"] = val_probabilities.max(axis=1)
+    validation_predictions_df["positive_probability"] = val_probabilities[:, 1]
+    validation_predictions_df.to_csv(artifacts_dir / "validation_predictions.csv", index=False)
+
     print(report)
     print(f"metrics: {artifacts_dir / 'metrics.json'}")
+    print(f"threshold_results: {artifacts_dir / 'threshold_results.csv'}")
     print(f"model: {artifacts_dir / 'model.pt'}")
     print(f"curves: {artifacts_dir / 'training_curves.png'}")
     print(f"confusion_matrix: {artifacts_dir / 'confusion_matrix.png'}")

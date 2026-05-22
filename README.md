@@ -154,13 +154,20 @@ python -m src.train_sklearn --subset-path data/processed/subset_binary.csv
   --features-path data/features/subset_binary_train_1000_logmel_3s_64mels.npz \
   --eval-features-path data/features/subset_binary_test_1000_logmel_3s_64mels.npz \
   --artifacts-dir artifacts \
-  --run-name cnn_logmel_binary_1000_test_eval \
+  --run-name cnn_logmel_binary_1000_threshold_tuned \
   --epochs 20 \
   --batch-size 64 \
   --learning-rate 0.001 \
   --weight-decay 0.0001 \
   --dropout 0.25 \
   --seed 42
+
+.venv/bin/python -m src.compare_predictions \
+  --left artifacts/sklearn_svm_rbf_binary_1000_tuned/predictions.csv \
+  --left-name svm \
+  --right artifacts/cnn_logmel_binary_1000_threshold_tuned/predictions.csv \
+  --right-name cnn \
+  --output-dir artifacts/compare_svm_tuned_vs_cnn_logmel_threshold_tuned
 
 .venv/bin/python -m src.make_validation_sample \
   --predictions-path artifacts/sklearn_logreg_binary_300/predictions.csv \
@@ -216,6 +223,8 @@ input: 1 x 64 x 94
 architecture: Conv2d 16 -> 32 -> 64, BatchNorm, ReLU, MaxPool, AdaptiveAvgPool
 accuracy: 0.6155
 macro F1: 0.6107
+best threshold: 0.50
+comparison vs tuned SVM: both_correct 1003, svm_only_correct 437, cnn_only_correct 228, both_wrong 332
 ```
 
 Разные подходы нужно сохранять в отдельные run directories через `--run-name`,
