@@ -98,6 +98,36 @@ python -m src.train_sklearn --subset-path data/processed/subset_binary.csv
   --model logreg \
   --seed 42
 
+.venv/bin/python -m src.make_subset \
+  --data-dir data/dusha_emotion_audio/data \
+  --split train \
+  --task binary \
+  --samples-per-class 1000 \
+  --output data/processed/subset_binary_train_1000.csv
+
+.venv/bin/python -m src.make_subset \
+  --data-dir data/dusha_emotion_audio/data \
+  --split test \
+  --task binary \
+  --samples-per-class 1000 \
+  --output data/processed/subset_binary_test_1000.csv
+
+.venv/bin/python -m src.build_feature_cache \
+  --subset-path data/processed/subset_binary_train_1000.csv \
+  --output data/features/subset_binary_train_1000_features.npz
+
+.venv/bin/python -m src.build_feature_cache \
+  --subset-path data/processed/subset_binary_test_1000.csv \
+  --output data/features/subset_binary_test_1000_features.npz
+
+.venv/bin/python -m src.train_sklearn \
+  --features-path data/features/subset_binary_train_1000_features.npz \
+  --eval-features-path data/features/subset_binary_test_1000_features.npz \
+  --artifacts-dir artifacts \
+  --run-name sklearn_logreg_binary_1000_test_eval \
+  --model logreg \
+  --seed 42
+
 .venv/bin/python -m src.make_validation_sample \
   --predictions-path artifacts/sklearn_logreg_binary_300/predictions.csv \
   --output artifacts/validation_sample_logreg_binary_300.csv \
@@ -125,6 +155,13 @@ validation rows: 120
 accuracy: 0.6967
 macro F1: 0.6966
 test rows: 600
+```
+
+Larger cached run на `1000/1000` train и `1000/1000` test:
+
+```text
+LogisticRegression: accuracy 0.7165, macro F1 0.7164
+RBF-SVM:            accuracy 0.7180, macro F1 0.7179
 ```
 
 Разные подходы нужно сохранять в отдельные run directories через `--run-name`,

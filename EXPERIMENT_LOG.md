@@ -816,12 +816,146 @@ external test macro F1:      0.6966
 - Feature extraction повторяется при каждом запуске; нужен feature cache для
   больших экспериментов.
 
+## 2026-05-22 — Feature cache and larger binary baseline
+
+### Цель
+
+Ускорить повторные эксперименты и проверить baseline на более крупном subset.
+До этого `librosa` features пересчитывались при каждом запуске, что мешает
+сравнивать модели на больших выборках.
+
+### Изменения в коде
+
+Добавлены:
+
+```text
+src/feature_cache.py
+src/build_feature_cache.py
+```
+
+`src/train_sklearn.py` получил параметры:
+
+```text
+--features-path
+--eval-features-path
+```
+
+Если переданы `.npz` cache-файлы, обучение и оценка идут без повторного чтения
+WAV и без повторного извлечения признаков.
+
+### Larger subsets
+
+Train subset:
+
+```bash
+.venv/bin/python -m src.make_subset \
+  --data-dir data/dusha_emotion_audio/data \
+  --split train \
+  --task binary \
+  --samples-per-class 1000 \
+  --output data/processed/subset_binary_train_1000.csv
+```
+
+```text
+target_label 0: 1000
+target_label 1: 1000
+total: 2000
+```
+
+Test subset:
+
+```bash
+.venv/bin/python -m src.make_subset \
+  --data-dir data/dusha_emotion_audio/data \
+  --split test \
+  --task binary \
+  --samples-per-class 1000 \
+  --output data/processed/subset_binary_test_1000.csv
+```
+
+```text
+target_label 0: 1000
+target_label 1: 1000
+total: 2000
+```
+
+### Feature cache
+
+```bash
+.venv/bin/python -m src.build_feature_cache \
+  --subset-path data/processed/subset_binary_train_1000.csv \
+  --output data/features/subset_binary_train_1000_features.npz \
+  --sample-rate 16000 \
+  --max-duration 6.0
+
+.venv/bin/python -m src.build_feature_cache \
+  --subset-path data/processed/subset_binary_test_1000.csv \
+  --output data/features/subset_binary_test_1000_features.npz \
+  --sample-rate 16000 \
+  --max-duration 6.0
+```
+
+Результат:
+
+```text
+data/features/subset_binary_train_1000_features.npz: 2000 rows, 48 features
+data/features/subset_binary_test_1000_features.npz:  2000 rows, 48 features
+data/features total size: 884K
+```
+
+### Cached model runs
+
+```bash
+.venv/bin/python -m src.train_sklearn \
+  --features-path data/features/subset_binary_train_1000_features.npz \
+  --eval-features-path data/features/subset_binary_test_1000_features.npz \
+  --artifacts-dir artifacts \
+  --run-name sklearn_logreg_binary_1000_test_eval \
+  --model logreg \
+  --seed 42
+
+.venv/bin/python -m src.train_sklearn \
+  --features-path data/features/subset_binary_train_1000_features.npz \
+  --eval-features-path data/features/subset_binary_test_1000_features.npz \
+  --artifacts-dir artifacts \
+  --run-name sklearn_svm_rbf_binary_1000_test_eval \
+  --model svm_rbf \
+  --seed 42
+```
+
+### Results
+
+```text
+run                                   model                                  accuracy  macro F1
+sklearn_logreg_binary_1000_test_eval  StandardScaler + LogisticRegression    0.7165    0.7164
+sklearn_svm_rbf_binary_1000_test_eval StandardScaler + SVC(kernel='rbf')     0.7180    0.7179
+```
+
+### Вывод
+
+На более крупном и отдельном test subset результат стал стабильнее и выше, чем
+у предыдущего `300/300` external test run:
+
+```text
+300/300 external test logreg macro F1:   0.6966
+1000/1000 external test logreg macro F1: 0.7164
+1000/1000 external test SVM macro F1:    0.7179
+```
+
+Feature cache сработал: после построения `.npz` новые sklearn-запуски занимают
+секунды, а не минуты.
+
+### Ограничения
+
+- Это всё ещё hand-crafted feature baseline, не neural model.
+- Hyperparameter tuning не проводился.
+- Feature cache сейчас хранит summary features, а не log-mel tensors для CNN.
+
 ## Следующие шаги
 
 1. Передать `artifacts/validation_sample_logreg_binary_300.csv` Диане на ручную проверку.
 2. Передать Диане папку `artifacts/validation_sample_logreg_binary_300_audio/`.
 3. После проверки внести агрегированные результаты в журнал.
 4. Добавить `run_notes.md` или генерировать краткий Markdown-отчёт по запуску.
-5. Прогнать baseline на большем subset, например 1000 examples/class.
-6. Добавить feature cache, чтобы не пересчитывать librosa features при каждом запуске.
-7. После sklearn baseline перейти к compact CNN на log-mel spectrogram.
+5. Попробовать простой hyperparameter tuning для SVM/logreg на cached features.
+6. После sklearn baseline перейти к compact CNN на log-mel spectrogram.

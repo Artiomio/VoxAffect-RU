@@ -25,6 +25,7 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.svm import SVC
 from tqdm import tqdm
 
+from .feature_cache import load_feature_cache
 from .features import extract_feature_vector
 
 
@@ -36,9 +37,19 @@ def parse_args() -> argparse.Namespace:
         help="Training CSV created by src.make_subset.",
     )
     parser.add_argument(
+        "--features-path",
+        default=None,
+        help="Optional training .npz feature cache created by src.build_feature_cache.",
+    )
+    parser.add_argument(
         "--eval-subset-path",
         default=None,
         help="Optional separate evaluation CSV. If set, train on all --subset-path rows.",
+    )
+    parser.add_argument(
+        "--eval-features-path",
+        default=None,
+        help="Optional separate evaluation .npz feature cache.",
     )
     parser.add_argument(
         "--artifacts-dir",
@@ -120,6 +131,27 @@ def build_feature_matrix(
         feature_names or [],
         pd.DataFrame(rows).reset_index(drop=True),
     )
+
+
+def load_features_from_args(
+    subset_path: Path,
+    features_path: Path | None,
+    sample_rate: int,
+    max_duration: float | None,
+) -> tuple[pd.DataFrame, np.ndarray, np.ndarray, list[str], pd.DataFrame, dict[str, object] | None]:
+    if features_path:
+        features, labels, feature_names, rows, metadata = load_feature_cache(features_path)
+        subset_source = metadata.get("subset_path", str(subset_path))
+        df = load_subset(Path(subset_source)) if Path(str(subset_source)).exists() else rows
+        return df, features, labels, feature_names, rows, metadata
+
+    df = load_subset(subset_path)
+    features, labels, feature_names, used_rows = build_feature_matrix(
+        df,
+        sample_rate=sample_rate,
+        max_duration=max_duration,
+    )
+    return df, features, labels, feature_names, used_rows, None
 
 
 def save_confusion_matrix(
@@ -222,27 +254,35 @@ def score_predictions(labels: np.ndarray, predictions: np.ndarray) -> dict[str, 
 def main() -> None:
     args = parse_args()
     subset_path = Path(args.subset_path)
+    features_path = Path(args.features_path) if args.features_path else None
     artifacts_dir = Path(args.artifacts_dir)
     if args.run_name:
         artifacts_dir = artifacts_dir / args.run_name
     artifacts_dir.mkdir(parents=True, exist_ok=True)
 
     max_duration = args.max_duration if args.max_duration > 0 else None
-    df = load_subset(subset_path)
-    features, labels, feature_names, used_rows = build_feature_matrix(
-        df,
+    df, features, labels, feature_names, used_rows, train_cache_metadata = load_features_from_args(
+        subset_path,
+        features_path,
         sample_rate=args.sample_rate,
         max_duration=max_duration,
     )
+    if train_cache_metadata and args.features_path:
+        subset_path = Path(str(train_cache_metadata.get("subset_path", subset_path)))
 
     eval_subset_path = Path(args.eval_subset_path) if args.eval_subset_path else None
-    if eval_subset_path:
-        eval_df = load_subset(eval_subset_path)
-        eval_features, eval_labels, _, eval_rows = build_feature_matrix(
-            eval_df,
+    eval_features_path = Path(args.eval_features_path) if args.eval_features_path else None
+    if eval_subset_path or eval_features_path:
+        if eval_subset_path is None:
+            eval_subset_path = Path("unknown_eval_subset.csv")
+        eval_df, eval_features, eval_labels, _, eval_rows, eval_cache_metadata = load_features_from_args(
+            eval_subset_path,
+            eval_features_path,
             sample_rate=args.sample_rate,
             max_duration=max_duration,
         )
+        if eval_cache_metadata and args.eval_features_path:
+            eval_subset_path = Path(str(eval_cache_metadata.get("subset_path", eval_subset_path)))
         train_x, val_x = features, eval_features
         train_y, val_y = labels, eval_labels
         train_rows, val_rows = used_rows, eval_rows
@@ -257,6 +297,7 @@ def main() -> None:
             stratify=labels,
         )
         eval_df = None
+        eval_cache_metadata = None
         evaluation_mode = "internal_train_validation_split"
 
     model, model_name = build_model(args)
@@ -269,8 +310,12 @@ def main() -> None:
     scores = score_predictions(val_y, predictions)
     metrics = {
         "subset_path": str(subset_path),
+        "features_path": str(features_path) if features_path else None,
         "eval_subset_path": str(eval_subset_path) if eval_subset_path else None,
+        "eval_features_path": str(eval_features_path) if eval_features_path else None,
         "evaluation_mode": evaluation_mode,
+        "train_cache_metadata": train_cache_metadata,
+        "eval_cache_metadata": eval_cache_metadata,
         "rows_total": int(len(df)),
         "eval_rows_total": int(len(eval_df)) if eval_df is not None else None,
         "rows_used": int(len(used_rows)),
