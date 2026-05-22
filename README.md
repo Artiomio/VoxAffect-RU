@@ -82,6 +82,13 @@ python -m src.train_sklearn --subset-path data/processed/subset_binary.csv
   --model logreg \
   --test-size 0.2 \
   --seed 42
+
+.venv/bin/python -m src.make_validation_sample \
+  --predictions-path artifacts/sklearn_logreg_binary_300/predictions.csv \
+  --output artifacts/validation_sample_logreg_binary_300.csv \
+  --n 30 \
+  --strategy mixed \
+  --seed 42
 ```
 
 Первый sklearn baseline на `subset_binary.csv`:
@@ -117,5 +124,11 @@ validation rows: 120
 Результат:
 
 ```text
-artifacts/validation_sample.csv
+artifacts/validation_sample_logreg_binary_300.csv
+```
+
+Поля для ручной проверки:
+
+```text
+human_label,human_comment,review_status,notes
 ```

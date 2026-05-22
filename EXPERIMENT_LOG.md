@@ -519,10 +519,110 @@ accuracy, но немного уступил по macro F1.
 artifacts/sklearn_logreg_binary_300/predictions.csv
 ```
 
+## 2026-05-22 — Human validation sample
+
+### Цель
+
+Сформировать небольшую выборку предсказаний для ручной проверки Дианой. Это
+нужно не для полной переразметки датасета, а для экспертной проверки качества
+модели и поиска показательных примеров для диплома.
+
+### Скрипт
+
+```text
+src/make_validation_sample.py
+```
+
+### Входные данные
+
+```text
+predictions: artifacts/sklearn_logreg_binary_300/predictions.csv
+input rows: 120
+model: StandardScaler + LogisticRegression
+task: binary
+```
+
+### Команда
+
+```bash
+.venv/bin/python -m src.make_validation_sample \
+  --predictions-path artifacts/sklearn_logreg_binary_300/predictions.csv \
+  --output artifacts/validation_sample_logreg_binary_300.csv \
+  --n 30 \
+  --strategy mixed \
+  --seed 42
+```
+
+### Стратегия выборки
+
+Использована стратегия `mixed`: выбрать смесь правильных и ошибочных
+предсказаний по разным true labels. Это полезнее для ручной проверки, чем
+случайная выборка только из уверенных правильных ответов.
+
+### Результат
+
+```text
+output: artifacts/validation_sample_logreg_binary_300.csv
+output rows: 30
+correct predictions: 16
+wrong predictions: 14
+target_label 0: 16
+target_label 1: 14
+```
+
+Поля CSV:
+
+```text
+audio_path
+source_label
+target_label
+predicted_label
+confidence
+is_correct
+human_label
+human_comment
+review_status
+notes
+```
+
+### Инструкция для ручной проверки
+
+Диана слушает `audio_path` и заполняет:
+
+```text
+human_label
+human_comment
+review_status
+notes
+```
+
+Рекомендуемые значения `human_comment`:
+
+```text
+ok
+wrong
+unclear
+garbage
+good example for thesis
+```
+
+### Вывод
+
+Подготовлен первый human validation artifact. Его можно использовать как
+материал для раздела диплома об экспертной проверке и как список примеров для
+качественного анализа ошибок.
+
+### Ограничения
+
+- Выборка сделана из validation split маленького binary subset.
+- Объём 30 examples подходит для первичной проверки, но не для статистически
+  строгой экспертной оценки.
+- Проверка пока не выполнена человеком; поля `human_*` пустые.
+
 ## Следующие шаги
 
-1. Сделать `src/make_validation_sample.py` из `artifacts/sklearn_logreg_binary_300/predictions.csv`.
-2. Сформировать `artifacts/validation_sample.csv` на 20-30 примеров для Дианы.
+1. Передать `artifacts/validation_sample_logreg_binary_300.csv` Диане на ручную проверку.
+2. После проверки внести агрегированные результаты в журнал.
 3. Добавить `run_notes.md` или генерировать краткий Markdown-отчёт по запуску.
 4. Прогнать baseline на большем subset, например 1000 examples/class.
 5. Добавить оценку на отдельном `test` split, чтобы получить более честную метрику.
