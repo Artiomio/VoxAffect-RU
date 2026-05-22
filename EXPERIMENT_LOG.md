@@ -951,11 +951,165 @@ Feature cache сработал: после построения `.npz` новы�
 - Hyperparameter tuning не проводился.
 - Feature cache сейчас хранит summary features, а не log-mel tensors для CNN.
 
+## 2026-05-22 — Hyperparameter and threshold tuning on cached features
+
+### Цель
+
+Проверить, можно ли улучшить sklearn baseline без перехода к neural model:
+
+- подобрать hyperparameters на internal validation split;
+- подобрать probability threshold для positive class;
+- финально оценить выбранную конфигурацию один раз на отдельном DUSHA `test`
+  cache.
+
+Важно: threshold и hyperparameters не подбирались на test split. Test
+использовался только для финальной оценки выбранной конфигурации.
+
+### Изменения в коде
+
+Добавлен:
+
+```text
+src/tune_sklearn.py
+```
+
+Скрипт:
+
+1. читает `.npz` feature cache;
+2. делит training cache на train/validation;
+3. перебирает сетку hyperparameters;
+4. для каждой конфигурации перебирает probability thresholds;
+5. выбирает лучший вариант по validation macro F1;
+6. переобучает выбранную модель на всём training cache;
+7. оценивает один раз на external test cache.
+
+Artifacts сохраняются в отдельные run directories:
+
+```text
+artifacts/sklearn_logreg_binary_1000_tuned/
+artifacts/sklearn_svm_rbf_binary_1000_tuned/
+```
+
+### Commands
+
+LogisticRegression:
+
+```bash
+.venv/bin/python -m src.tune_sklearn \
+  --features-path data/features/subset_binary_train_1000_features.npz \
+  --eval-features-path data/features/subset_binary_test_1000_features.npz \
+  --artifacts-dir artifacts \
+  --run-name sklearn_logreg_binary_1000_tuned \
+  --model logreg \
+  --seed 42
+```
+
+RBF-SVM:
+
+```bash
+.venv/bin/python -m src.tune_sklearn \
+  --features-path data/features/subset_binary_train_1000_features.npz \
+  --eval-features-path data/features/subset_binary_test_1000_features.npz \
+  --artifacts-dir artifacts \
+  --run-name sklearn_svm_rbf_binary_1000_tuned \
+  --model svm_rbf \
+  --seed 42
+```
+
+### Search spaces
+
+LogisticRegression:
+
+```text
+C:            0.01, 0.03, 0.1, 0.3, 1.0, 3.0, 10.0
+class_weight: balanced, None
+threshold:    0.30..0.70, step 0.02
+```
+
+RBF-SVM:
+
+```text
+C:            0.3, 1.0, 3.0, 10.0
+gamma:        scale, 0.003, 0.01, 0.03
+class_weight: balanced, None
+threshold:    0.30..0.70, step 0.02
+```
+
+### Results
+
+```text
+run                                best validation params                                  validation macro F1  test accuracy  test macro F1
+sklearn_logreg_binary_1000_tuned   C=0.03, class_weight=balanced, threshold=0.52            0.7220               0.7165         0.7157
+sklearn_svm_rbf_binary_1000_tuned  C=10.0, gamma=0.003, class_weight=balanced, threshold=0.46 0.7249               0.7200         0.7195
+```
+
+Baseline comparison:
+
+```text
+untuned LogisticRegression macro F1: 0.7164
+tuned LogisticRegression macro F1:   0.7157
+
+untuned RBF-SVM macro F1:            0.7179
+tuned RBF-SVM macro F1:              0.7195
+```
+
+### Вывод
+
+Tuning дал небольшой выигрыш только для RBF-SVM:
+
+```text
+macro F1 +0.0016
+accuracy +0.0020
+```
+
+Для LogisticRegression tuning не улучшил external test score, несмотря на
+лучший validation вариант. Это полезный результат: validation selection может
+не переноситься на test идеально, особенно при малом feature set и небольшом
+dataset subset.
+
+Текущий лучший sklearn baseline:
+
+```text
+StandardScaler + SVC(kernel='rbf')
+C=10.0
+gamma=0.003
+class_weight=balanced
+positive threshold=0.46
+test accuracy=0.7200
+test macro F1=0.7195
+```
+
+### Artifacts
+
+```text
+artifacts/sklearn_logreg_binary_1000_tuned/metrics.json
+artifacts/sklearn_logreg_binary_1000_tuned/tuning_results.csv
+artifacts/sklearn_logreg_binary_1000_tuned/classification_report.txt
+artifacts/sklearn_logreg_binary_1000_tuned/confusion_matrix.png
+artifacts/sklearn_logreg_binary_1000_tuned/predictions.csv
+
+artifacts/sklearn_svm_rbf_binary_1000_tuned/metrics.json
+artifacts/sklearn_svm_rbf_binary_1000_tuned/tuning_results.csv
+artifacts/sklearn_svm_rbf_binary_1000_tuned/classification_report.txt
+artifacts/sklearn_svm_rbf_binary_1000_tuned/confusion_matrix.png
+artifacts/sklearn_svm_rbf_binary_1000_tuned/predictions.csv
+```
+
+### Ограничения
+
+- Search space небольшой и ручной.
+- Threshold оптимизировался по probability estimates; для SVM эти вероятности
+  калибруются внутренним механизмом sklearn.
+- Test subset всё ещё balanced `1000/1000`, не полное естественное
+  распределение DUSHA.
+- Улучшение SVM маленькое; его стоит трактовать как incremental baseline, а не
+  как качественный прорыв.
+
 ## Следующие шаги
 
 1. Передать `artifacts/validation_sample_logreg_binary_300.csv` Диане на ручную проверку.
 2. Передать Диане папку `artifacts/validation_sample_logreg_binary_300_audio/`.
 3. После проверки внести агрегированные результаты в журнал.
-4. Добавить `run_notes.md` или генерировать краткий Markdown-отчёт по запуску.
-5. Попробовать простой hyperparameter tuning для SVM/logreg на cached features.
+4. Добавить компактный `run_notes.md` generator для каждого run directory.
+5. Сравнить ошибки лучшего tuned SVM с validation sample для ручной проверки.
 6. После sklearn baseline перейти к compact CNN на log-mel spectrogram.

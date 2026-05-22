@@ -128,6 +128,14 @@ python -m src.train_sklearn --subset-path data/processed/subset_binary.csv
   --model logreg \
   --seed 42
 
+.venv/bin/python -m src.tune_sklearn \
+  --features-path data/features/subset_binary_train_1000_features.npz \
+  --eval-features-path data/features/subset_binary_test_1000_features.npz \
+  --artifacts-dir artifacts \
+  --run-name sklearn_svm_rbf_binary_1000_tuned \
+  --model svm_rbf \
+  --seed 42
+
 .venv/bin/python -m src.make_validation_sample \
   --predictions-path artifacts/sklearn_logreg_binary_300/predictions.csv \
   --output artifacts/validation_sample_logreg_binary_300.csv \
@@ -162,6 +170,17 @@ Larger cached run на `1000/1000` train и `1000/1000` test:
 ```text
 LogisticRegression: accuracy 0.7165, macro F1 0.7164
 RBF-SVM:            accuracy 0.7180, macro F1 0.7179
+```
+
+Tuned cached runs с подбором hyperparameters и probability threshold на
+internal validation split, затем финальной оценкой на отдельном test cache:
+
+```text
+LogisticRegression tuned: accuracy 0.7165, macro F1 0.7157
+  best validation: C=0.03, class_weight=balanced, threshold=0.52
+
+RBF-SVM tuned:            accuracy 0.7200, macro F1 0.7195
+  best validation: C=10.0, gamma=0.003, class_weight=balanced, threshold=0.46
 ```
 
 Разные подходы нужно сохранять в отдельные run directories через `--run-name`,
