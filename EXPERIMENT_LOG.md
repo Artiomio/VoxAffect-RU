@@ -2373,3 +2373,245 @@ This step validates file counts and successful `tar` exit status only. It does n
 ### Next step
 
 Run the DUSHA inspection step on the extracted directories, then create the balanced subset for the sklearn baseline.
+
+
+## 2026-05-31 - GPU readiness check for CNN training
+
+### Goal / hypothesis
+
+Check whether the local workstation can run `src/train_cnn_logmel.py` on GPU after the DUSHA audio archives were extracted.
+
+### Input data
+
+```text
+training cache: data/features/subset_binary_train_1000_logmel_3s_64mels.npz
+eval cache: data/features/subset_binary_test_1000_logmel_3s_64mels.npz
+training script: src/train_cnn_logmel.py
+python env: .venv
+```
+
+### Commands / checks
+
+```bash
+nvidia-smi
+.venv/bin/python -c "import torch; print(torch.__version__); print(torch.cuda.is_available()); print(torch.version.cuda); print(torch.cuda.device_count())"
+.venv/bin/python -m pip show torch
+.venv/bin/python -m src.train_cnn_logmel --features-path data/features/subset_binary_train_1000_logmel_3s_64mels.npz --eval-features-path data/features/subset_binary_test_1000_logmel_3s_64mels.npz --run-name cuda_smoke_check_2026_05_31 --epochs 1 --batch-size 16 --device cuda
+find data/features -maxdepth 1 -type f -name '*logmel*.npz' -exec ls -lh {} \;
+```
+
+### Results
+
+```text
+GPU hardware outside sandbox: visible
+GPU: NVIDIA GeForce RTX 3060
+GPU memory: 12288 MiB
+driver version: 580.159.03
+nvidia-smi CUDA version: 13.0
+current .venv torch: 2.12.0+cpu
+torch.cuda.is_available(): False
+torch.version.cuda: None
+torch.cuda.device_count(): 0
+CUDA smoke run result: failed before training with "CUDA was requested but is not available."
+available log-mel caches:
+  data/features/subset_binary_train_1000_logmel_3s_64mels.npz 40M
+  data/features/subset_binary_test_1000_logmel_3s_64mels.npz 40M
+  data/features/subset_binary_train_1000_logmel_6s_80mels.npz 78M
+  data/features/subset_binary_test_1000_logmel_6s_80mels.npz 77M
+```
+
+### Comparison table
+
+```text
+run | model | data/subset | key parameters | accuracy | macro F1 | interpretation
+----|-------|-------------|----------------|----------|----------|----------------
+cuda_smoke_check_2026_05_31 | CompactLogMelCNN | subset_binary_train/test_1000_logmel_3s_64mels | --epochs 1 --batch-size 16 --device cuda | n/a | n/a | not run; current .venv has CPU-only PyTorch despite GPU being visible through nvidia-smi
+```
+
+### Interpretation
+
+The workstation hardware can expose an RTX 3060, but the project `.venv` cannot run CUDA workloads because it contains a CPU-only PyTorch build. GPU training should be possible after installing a CUDA-enabled PyTorch build into an environment that has access to `/dev/nvidia*`.
+
+### Limitations
+
+The smoke check did not install or modify PyTorch. It did not benchmark GPU throughput or validate memory limits. `nvidia-smi` required execution outside the default sandbox to see the GPU device.
+
+### Next step
+
+Install a CUDA-enabled PyTorch build in a separate GPU environment or replace the CPU-only torch package in `.venv`, then rerun the same one-epoch smoke command with `--device cuda`.
+
+
+## 2026-05-31 - CUDA PyTorch install and GPU smoke training
+
+### Goal / hypothesis
+
+Replace the CPU-only PyTorch package in the project `.venv` with a CUDA-enabled build and verify that `src/train_cnn_logmel.py` can train on the RTX 3060.
+
+### Input data
+
+```text
+training cache: data/features/subset_binary_train_1000_logmel_3s_64mels.npz
+eval cache: data/features/subset_binary_test_1000_logmel_3s_64mels.npz
+training script: src/train_cnn_logmel.py
+python: .venv/bin/python, Python 3.12.3
+GPU: NVIDIA GeForce RTX 3060, 12288 MiB
+driver: 580.159.03
+```
+
+### Commands / checks
+
+```bash
+.venv/bin/python -m pip install --force-reinstall torch==2.11.0+cu128 --index-url https://download.pytorch.org/whl/cu128
+.venv/bin/python -c "import torch; print(torch.__version__); print(torch.cuda.is_available()); print(torch.version.cuda); print(torch.cuda.device_count()); print(torch.cuda.get_device_name(0)); x=torch.ones((2,3), device='cuda'); print(x.device); print(float(x.sum().item()))"
+.venv/bin/python -m pip check
+nvidia-smi
+.venv/bin/python -m src.train_cnn_logmel --features-path data/features/subset_binary_train_1000_logmel_3s_64mels.npz --eval-features-path data/features/subset_binary_test_1000_logmel_3s_64mels.npz --run-name cuda_smoke_check_2026_05_31_rerun --epochs 1 --batch-size 64 --device cuda
+du -sh artifacts/cuda_smoke_check_2026_05_31_rerun .venv
+```
+
+### Results
+
+```text
+installed torch: 2.11.0+cu128
+torch.cuda.is_available(): True
+torch.version.cuda: 12.8
+torch.cuda.device_count(): 1
+torch CUDA device: NVIDIA GeForce RTX 3060
+test tensor device: cuda:0
+test tensor sum: 6.0
+.venv size after CUDA install: 7.5G
+pip check warning:
+  datasets 4.8.5 requires fsspec[http]<=2026.2.0,>=2023.1.0, but fsspec 2026.4.0 is installed
+smoke artifact path: artifacts/cuda_smoke_check_2026_05_31_rerun/
+smoke artifact size: 580K
+smoke duration_seconds: 2.86
+smoke mean_epoch_seconds: 0.65
+smoke device: cuda
+smoke eval accuracy: 0.5475
+smoke eval macro F1: 0.5379
+```
+
+### Comparison table
+
+```text
+run | model | data/subset | key parameters | accuracy | macro F1 | interpretation
+----|-------|-------------|----------------|----------|----------|----------------
+cuda_smoke_check_2026_05_31_rerun | CompactLogMelCNN | subset_binary_train/test_1000_logmel_3s_64mels | torch 2.11.0+cu128; --epochs 1 --batch-size 64 --device cuda | 0.5475 | 0.5379 | GPU training path works; metrics are only a smoke check, not a meaningful trained model
+```
+
+### Interpretation
+
+The project environment is now GPU-capable. PyTorch can allocate tensors on `cuda:0`, and the CNN training script completed a one-epoch GPU run on the cached 1000-per-class log-mel subset.
+
+### Limitations
+
+The smoke run used one epoch and should not be interpreted as a final model. The CUDA-enabled PyTorch install introduced an `fsspec` version conflict with `datasets`; this is unlikely to affect cached CNN training, but dataset download/loading workflows should be checked before use. The project intentionally keeps `requirements.txt` CPU-friendly, so this GPU install is an environment-level change rather than a requirements change.
+
+### Next step
+
+Run the planned longer CNN experiment on GPU using a distinct `run-name`, then compare its metrics against the existing CPU/GPU baseline entries in this log.
+
+
+## 2026-05-31 - Longer GPU CNN training on 6s/80-mel cache
+
+### Goal / hypothesis
+
+Test whether the previous compact CNN was undertrained by running a wider model for a longer schedule on GPU, using the more detailed 6-second / 80-mel cached features.
+
+### Input data
+
+```text
+training cache: data/features/subset_binary_train_1000_logmel_6s_80mels.npz
+eval cache: data/features/subset_binary_test_1000_logmel_6s_80mels.npz
+train subset: data/processed/subset_binary_train_1000.csv
+eval subset: data/processed/subset_binary_test_1000.csv
+rows: 2000 train-subset rows split into 1600 train / 400 validation; 2000 external eval rows
+```
+
+### Commands / scripts used
+
+```bash
+.venv/bin/python -m src.train_cnn_logmel \
+  --features-path data/features/subset_binary_train_1000_logmel_6s_80mels.npz \
+  --eval-features-path data/features/subset_binary_test_1000_logmel_6s_80mels.npz \
+  --run-name cnn_logmel_binary_1000_6s80mels_wide_pool4_120ep_gpu \
+  --epochs 120 \
+  --batch-size 128 \
+  --channels 32,64,128 \
+  --pool-output-size 4 \
+  --scheduler reduce_on_plateau \
+  --lr-factor 0.5 \
+  --lr-patience 5 \
+  --patience 30 \
+  --device cuda
+```
+
+### Important parameters
+
+```text
+model: CompactLogMelCNN
+channels: [32, 64, 128]
+pool_output_size: 4
+classifier_input_features: 2048
+dropout: 0.25
+learning_rate: 0.001
+weight_decay: 0.0001
+scheduler: reduce_on_plateau
+lr_factor: 0.5
+lr_patience: 5
+patience: 30
+device: cuda
+torch: 2.11.0+cu128
+```
+
+### Metrics and artifacts
+
+```text
+run_name: cnn_logmel_binary_1000_6s80mels_wide_pool4_120ep_gpu
+artifact dir: artifacts/cnn_logmel_binary_1000_6s80mels_wide_pool4_120ep_gpu/
+artifact size: 972K
+epochs completed: 120
+best epoch: 96
+best validation accuracy: 0.7775
+best validation macro F1: 0.7773
+best validation threshold: 0.60
+best threshold validation macro F1: 0.7797
+external eval accuracy: 0.7450
+external eval precision macro: 0.7526
+external eval recall macro: 0.7450
+external eval macro F1: 0.7431
+duration: 99.3 seconds
+mean epoch time: 0.80 seconds
+generated files:
+  artifacts/cnn_logmel_binary_1000_6s80mels_wide_pool4_120ep_gpu/metrics.json
+  artifacts/cnn_logmel_binary_1000_6s80mels_wide_pool4_120ep_gpu/model.pt
+  artifacts/cnn_logmel_binary_1000_6s80mels_wide_pool4_120ep_gpu/predictions.csv
+  artifacts/cnn_logmel_binary_1000_6s80mels_wide_pool4_120ep_gpu/threshold_results.csv
+  artifacts/cnn_logmel_binary_1000_6s80mels_wide_pool4_120ep_gpu/training_curves.csv
+  artifacts/cnn_logmel_binary_1000_6s80mels_wide_pool4_120ep_gpu/training_curves.png
+  artifacts/cnn_logmel_binary_1000_6s80mels_wide_pool4_120ep_gpu/confusion_matrix.png
+  artifacts/cnn_logmel_binary_1000_6s80mels_wide_pool4_120ep_gpu/classification_report.txt
+  artifacts/cnn_logmel_binary_1000_6s80mels_wide_pool4_120ep_gpu/validation_predictions.csv
+```
+
+### Comparison table
+
+```text
+run | model | data/subset | key parameters | accuracy | macro F1 | interpretation
+----|-------|-------------|----------------|----------|----------|----------------
+cnn_logmel_binary_1000_6s80mels_60ep_f1_scheduler | CompactLogMelCNN | 1000/class, 6s/80mels | CPU; channels 16,32,64; pool 1; early stop at 31/60 | 0.6300 | 0.6245 | previous compact 6s CNN baseline; likely capacity/training-limited
+cnn_logmel_binary_1000_no_final_pool_60ep_f1_scheduler | CompactLogMelCNN | 1000/class, 3s/64mels | CPU; channels 16,32,64; no final pool; early stop at 46/60 | 0.6230 | 0.6215 | stronger validation than default, but external eval did not improve
+cnn_logmel_binary_1000_6s80mels_wide_pool4_120ep_gpu | CompactLogMelCNN | 1000/class, 6s/80mels | GPU; channels 32,64,128; pool 4; 120 epochs; scheduler | 0.7450 | 0.7431 | substantial improvement; previous CNN setup was undertrained and/or under-capacity
+```
+
+### Interpretation
+
+The wider GPU run improves external macro F1 from about 0.62 to 0.7431 on the same 1000-per-class binary evaluation design. Validation performance continued improving past the old 60-epoch budget and peaked at epoch 96, supporting the hypothesis that the earlier CNN runs were undertrained and too compact.
+
+### Limitations
+
+The experiment still uses the balanced 1000-per-class subset rather than all extracted DUSHA audio. The validation split is internal to the training subset, so the external test metrics are the primary result. The best validation threshold was recorded but the reported external metrics are from the default prediction path; a separate threshold-tuned eval can be run if needed for final comparison.
+
+### Next step
+
+Run a threshold-tuned evaluation and/or repeat the same GPU configuration on a larger balanced subset built from the now-complete extracted DUSHA train/test audio.
