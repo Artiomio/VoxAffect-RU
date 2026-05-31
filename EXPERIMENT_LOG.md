@@ -2615,3 +2615,110 @@ The experiment still uses the balanced 1000-per-class subset rather than all ext
 ### Next step
 
 Run a threshold-tuned evaluation and/or repeat the same GPU configuration on a larger balanced subset built from the now-complete extracted DUSHA train/test audio.
+
+
+## 2026-05-31 - Extended 1200-epoch budget GPU CNN training
+
+### Goal / hypothesis
+
+Test whether increasing the training budget by 10x over the 120-epoch GPU run gives additional validation and external-eval improvement, while relying on early stopping to avoid wasting time after convergence.
+
+### Input data
+
+```text
+training cache: data/features/subset_binary_train_1000_logmel_6s_80mels.npz
+eval cache: data/features/subset_binary_test_1000_logmel_6s_80mels.npz
+train subset: data/processed/subset_binary_train_1000.csv
+eval subset: data/processed/subset_binary_test_1000.csv
+rows: 2000 train-subset rows split into 1600 train / 400 validation; 2000 external eval rows
+previous comparison run: artifacts/cnn_logmel_binary_1000_6s80mels_wide_pool4_120ep_gpu/
+```
+
+### Commands / scripts used
+
+```bash
+.venv/bin/python -m src.train_cnn_logmel \
+  --features-path data/features/subset_binary_train_1000_logmel_6s_80mels.npz \
+  --eval-features-path data/features/subset_binary_test_1000_logmel_6s_80mels.npz \
+  --run-name cnn_logmel_binary_1000_6s80mels_wide_pool4_1200ep_gpu \
+  --epochs 1200 \
+  --batch-size 128 \
+  --channels 32,64,128 \
+  --pool-output-size 4 \
+  --scheduler reduce_on_plateau \
+  --lr-factor 0.5 \
+  --lr-patience 10 \
+  --patience 120 \
+  --device cuda
+```
+
+### Important parameters
+
+```text
+model: CompactLogMelCNN
+channels: [32, 64, 128]
+pool_output_size: 4
+classifier_input_features: 2048
+dropout: 0.25
+learning_rate: 0.001
+weight_decay: 0.0001
+scheduler: reduce_on_plateau
+lr_factor: 0.5
+lr_patience: 10
+patience: 120
+device: cuda
+torch: 2.11.0+cu128
+```
+
+### Metrics and artifacts
+
+```text
+run_name: cnn_logmel_binary_1000_6s80mels_wide_pool4_1200ep_gpu
+artifact dir: artifacts/cnn_logmel_binary_1000_6s80mels_wide_pool4_1200ep_gpu/
+artifact size: 1.1M
+epochs requested: 1200
+epochs completed: 281
+stopped early: true
+best epoch: 161
+best validation accuracy: 0.7875
+best validation macro F1: 0.7870
+best validation threshold: 0.50
+external eval accuracy: 0.7575
+external eval precision macro: 0.7575
+external eval recall macro: 0.7575
+external eval macro F1: 0.7575
+duration: 229.6 seconds
+mean epoch time: 0.81 seconds
+generated files:
+  artifacts/cnn_logmel_binary_1000_6s80mels_wide_pool4_1200ep_gpu/metrics.json
+  artifacts/cnn_logmel_binary_1000_6s80mels_wide_pool4_1200ep_gpu/model.pt
+  artifacts/cnn_logmel_binary_1000_6s80mels_wide_pool4_1200ep_gpu/predictions.csv
+  artifacts/cnn_logmel_binary_1000_6s80mels_wide_pool4_1200ep_gpu/threshold_results.csv
+  artifacts/cnn_logmel_binary_1000_6s80mels_wide_pool4_1200ep_gpu/training_curves.csv
+  artifacts/cnn_logmel_binary_1000_6s80mels_wide_pool4_1200ep_gpu/training_curves.png
+  artifacts/cnn_logmel_binary_1000_6s80mels_wide_pool4_1200ep_gpu/confusion_matrix.png
+  artifacts/cnn_logmel_binary_1000_6s80mels_wide_pool4_1200ep_gpu/classification_report.txt
+  artifacts/cnn_logmel_binary_1000_6s80mels_wide_pool4_1200ep_gpu/validation_predictions.csv
+```
+
+### Comparison table
+
+```text
+run | model | data/subset | key parameters | accuracy | macro F1 | interpretation
+----|-------|-------------|----------------|----------|----------|----------------
+cnn_logmel_binary_1000_6s80mels_60ep_f1_scheduler | CompactLogMelCNN | 1000/class, 6s/80mels | CPU; channels 16,32,64; pool 1; early stop at 31/60 | 0.6300 | 0.6245 | compact earlier CNN baseline
+cnn_logmel_binary_1000_6s80mels_wide_pool4_120ep_gpu | CompactLogMelCNN | 1000/class, 6s/80mels | GPU; channels 32,64,128; pool 4; 120 epochs | 0.7450 | 0.7431 | large gain from wider model and GPU training
+cnn_logmel_binary_1000_6s80mels_wide_pool4_1200ep_gpu | CompactLogMelCNN | 1000/class, 6s/80mels | GPU; channels 32,64,128; pool 4; 1200 epoch budget; early stop at 281 | 0.7575 | 0.7575 | modest additional gain; convergence around epoch 161, then plateau
+```
+
+### Interpretation
+
+The 10x epoch budget improved the external macro F1 from 0.7431 to 0.7575. Validation macro F1 peaked at epoch 161, then stayed on a plateau while the scheduler drove the learning rate effectively to zero. This suggests that longer training helps up to about 160 epochs for this subset/configuration, but a full 1200 epochs is unnecessary with the current schedule.
+
+### Limitations
+
+The experiment still uses the balanced 1000-per-class cached subset, not the full extracted DUSHA train/test corpus. The run is deterministic for the existing seed and split, but only one seed was tested. Further gains probably require more data, augmentation, a different schedule, or architecture changes rather than simply more epochs.
+
+### Next step
+
+Build a larger balanced subset from the now-complete extracted data and repeat the best GPU configuration, or try a schedule with a lower starting learning rate and less aggressive decay around the 120-200 epoch window.
