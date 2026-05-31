@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import argparse
+from datetime import datetime, timezone
 import json
 import random
+import time
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -32,6 +34,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--learning-rate", type=float, default=1e-3)
     parser.add_argument("--weight-decay", type=float, default=1e-4)
     parser.add_argument("--dropout", type=float, default=0.25)
+    parser.add_argument(
+        "--channels",
+        default="16,32,64",
+        help="Comma-separated CNN channel sizes, for example 16,32,64 or 32,64,128.",
+    )
+    parser.add_argument(
+        "--pool-output-size",
+        type=int,
+        default=1,
+        help="Final adaptive pooling output size. Use 1 for global average pooling, 4 for 4x4, or 0 to disable.",
+    )
     parser.add_argument("--test-size", type=float, default=0.2)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--threshold-min", type=float, default=0.30)
@@ -62,28 +75,50 @@ def parse_args() -> argparse.Namespace:
 
 
 class CompactLogMelCNN(nn.Module):
-    def __init__(self, num_classes: int = 2, dropout: float = 0.25) -> None:
+    def __init__(
+        self,
+        channels: list[int],
+        input_shape: tuple[int, int],
+        pool_output_size: int,
+        num_classes: int = 2,
+        dropout: float = 0.25,
+    ) -> None:
         super().__init__()
-        self.features = nn.Sequential(
-            nn.Conv2d(1, 16, kernel_size=3, padding=1),
-            nn.BatchNorm2d(16),
-            nn.ReLU(),
-            nn.MaxPool2d(2),
-            nn.Dropout2d(dropout / 2),
-            nn.Conv2d(16, 32, kernel_size=3, padding=1),
-            nn.BatchNorm2d(32),
-            nn.ReLU(),
-            nn.MaxPool2d(2),
-            nn.Dropout2d(dropout),
-            nn.Conv2d(32, 64, kernel_size=3, padding=1),
-            nn.BatchNorm2d(64),
-            nn.ReLU(),
-            nn.AdaptiveAvgPool2d((1, 1)),
+        if not channels:
+            raise ValueError("channels must not be empty.")
+        if pool_output_size < 0:
+            raise ValueError("pool_output_size must be non-negative.")
+        layers = []
+        in_channels = 1
+        for index, out_channels in enumerate(channels):
+            layers.extend(
+                [
+                    nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1),
+                    nn.BatchNorm2d(out_channels),
+                    nn.ReLU(),
+                ]
+            )
+            if index < len(channels) - 1:
+                layers.extend(
+                    [
+                        nn.MaxPool2d(2),
+                        nn.Dropout2d(dropout / 2 if index == 0 else dropout),
+                    ]
+                )
+            in_channels = out_channels
+        if pool_output_size > 0:
+            layers.append(nn.AdaptiveAvgPool2d((pool_output_size, pool_output_size)))
+        self.features = nn.Sequential(*layers)
+        self.pool_output_size = pool_output_size
+        self.classifier_input_features = compute_classifier_input_features(
+            input_shape=input_shape,
+            channels=channels,
+            pool_output_size=pool_output_size,
         )
         self.classifier = nn.Sequential(
             nn.Flatten(),
             nn.Dropout(dropout),
-            nn.Linear(64, num_classes),
+            nn.Linear(self.classifier_input_features, num_classes),
         )
 
     def forward(self, inputs: torch.Tensor) -> torch.Tensor:
@@ -104,6 +139,33 @@ def choose_device(name: str) -> torch.device:
     if name == "cuda" and not torch.cuda.is_available():
         raise SystemExit("CUDA was requested but is not available.")
     return torch.device(name)
+
+
+def parse_channels(value: str) -> list[int]:
+    try:
+        channels = [int(part.strip()) for part in value.split(",") if part.strip()]
+    except ValueError as exc:
+        raise SystemExit(f"Invalid --channels value: {value}") from exc
+    if not channels or any(channel <= 0 for channel in channels):
+        raise SystemExit(f"--channels must contain positive integers: {value}")
+    return channels
+
+
+def compute_classifier_input_features(
+    input_shape: tuple[int, int],
+    channels: list[int],
+    pool_output_size: int,
+) -> int:
+    if pool_output_size > 0:
+        return channels[-1] * pool_output_size * pool_output_size
+
+    height, width = input_shape
+    for _ in channels[:-1]:
+        height //= 2
+        width //= 2
+    if height <= 0 or width <= 0:
+        raise ValueError(f"Input shape is too small after pooling: {input_shape}")
+    return channels[-1] * height * width
 
 
 def make_loader(
@@ -224,8 +286,13 @@ def main() -> None:
     args = parse_args()
     set_seed(args.seed)
     device = choose_device(args.device)
+    channels = parse_channels(args.channels)
+    if args.pool_output_size < 0:
+        raise SystemExit("--pool-output-size must be non-negative.")
     artifacts_dir = Path(args.artifacts_dir) / args.run_name
     artifacts_dir.mkdir(parents=True, exist_ok=True)
+    started_at = datetime.now(timezone.utc)
+    run_start_time = time.perf_counter()
 
     features, labels, rows, train_metadata = load_logmel_cache(args.features_path)
     eval_features, eval_labels, eval_rows, eval_metadata = load_logmel_cache(args.eval_features_path)
@@ -242,7 +309,13 @@ def main() -> None:
     val_loader = make_loader(val_x, val_y, args.batch_size, shuffle=False)
     eval_loader = make_loader(eval_features, eval_labels, args.batch_size, shuffle=False)
 
-    model = CompactLogMelCNN(num_classes=len(np.unique(labels)), dropout=args.dropout).to(device)
+    model = CompactLogMelCNN(
+        channels=channels,
+        input_shape=(features.shape[1], features.shape[2]),
+        pool_output_size=args.pool_output_size,
+        num_classes=len(np.unique(labels)),
+        dropout=args.dropout,
+    ).to(device)
     criterion = nn.CrossEntropyLoss()
     optimizer = torch.optim.AdamW(
         model.parameters(),
@@ -266,6 +339,7 @@ def main() -> None:
     epochs_without_improvement = 0
     stopped_early = False
     for epoch in range(1, args.epochs + 1):
+        epoch_start_time = time.perf_counter()
         train_loss, train_accuracy = run_epoch(model, train_loader, criterion, device, optimizer)
         val_loss, val_accuracy = run_epoch(model, val_loader, criterion, device)
         val_predictions, _ = predict(model, val_loader, device)
@@ -273,6 +347,7 @@ def main() -> None:
         val_f1_macro = float(val_scores["f1_macro"])
         if scheduler is not None:
             scheduler.step(val_loss)
+        epoch_duration_seconds = time.perf_counter() - epoch_start_time
         history.append(
             {
                 "epoch": epoch,
@@ -284,6 +359,7 @@ def main() -> None:
                 "val_recall_macro": val_scores["recall_macro"],
                 "val_f1_macro": val_f1_macro,
                 "learning_rate": current_learning_rate(optimizer),
+                "epoch_duration_seconds": epoch_duration_seconds,
             }
         )
         if val_accuracy > best_val_accuracy:
@@ -299,7 +375,8 @@ def main() -> None:
             f"epoch {epoch:03d} "
             f"train_loss={train_loss:.4f} train_acc={train_accuracy:.4f} "
             f"val_loss={val_loss:.4f} val_acc={val_accuracy:.4f} "
-            f"val_f1={val_f1_macro:.4f} lr={current_learning_rate(optimizer):.6f}"
+            f"val_f1={val_f1_macro:.4f} lr={current_learning_rate(optimizer):.6f} "
+            f"epoch_sec={epoch_duration_seconds:.1f}"
         )
         if args.patience > 0 and epochs_without_improvement >= args.patience:
             stopped_early = True
@@ -325,12 +402,20 @@ def main() -> None:
     eval_scores = score_predictions(eval_labels, eval_predictions)
     report = classification_report(eval_labels, eval_predictions, digits=4)
     class_names = [str(value) for value in sorted(np.unique(np.concatenate([labels, eval_labels])))]
+    finished_at = datetime.now(timezone.utc)
+    duration_seconds = time.perf_counter() - run_start_time
+    epoch_durations = [row["epoch_duration_seconds"] for row in history]
+    mean_epoch_seconds = float(np.mean(epoch_durations)) if epoch_durations else None
 
     metrics = {
         "run_name": args.run_name,
         "model": "CompactLogMelCNN",
         "features_path": args.features_path,
         "eval_features_path": args.eval_features_path,
+        "started_at": started_at.isoformat(),
+        "finished_at": finished_at.isoformat(),
+        "duration_seconds": duration_seconds,
+        "mean_epoch_seconds": mean_epoch_seconds,
         "train_cache_metadata": train_metadata,
         "eval_cache_metadata": eval_metadata,
         "rows_total": int(len(rows)),
@@ -345,6 +430,9 @@ def main() -> None:
         "learning_rate": args.learning_rate,
         "weight_decay": args.weight_decay,
         "dropout": args.dropout,
+        "channels": channels,
+        "pool_output_size": args.pool_output_size,
+        "classifier_input_features": model.classifier_input_features,
         "device": str(device),
         "scheduler": args.scheduler,
         "lr_factor": args.lr_factor,
@@ -395,6 +483,9 @@ def main() -> None:
     validation_predictions_df.to_csv(artifacts_dir / "validation_predictions.csv", index=False)
 
     print(report)
+    print(f"duration_seconds: {duration_seconds:.1f}")
+    if mean_epoch_seconds is not None:
+        print(f"mean_epoch_seconds: {mean_epoch_seconds:.1f}")
     print(f"metrics: {artifacts_dir / 'metrics.json'}")
     print(f"threshold_results: {artifacts_dir / 'threshold_results.csv'}")
     print(f"model: {artifacts_dir / 'model.pt'}")

@@ -1681,3 +1681,695 @@ artifacts/compare_svm_tuned_vs_cnn_logmel_60ep_f1_scheduler/comparison_by_label.
 5. Улучшить CNN input: `duration=6.0`, возможно `n_mels=80`.
 6. Попробовать более широкую CNN `32 -> 64 -> 128`.
 7. Подготовить для Дианы короткий набор `both_wrong` и `model_disagreement` аудио.
+
+
+## 2026-05-22 - Wide CNN baseline on 3s/64-mel log-mel cache
+
+### Goal / hypothesis
+
+Check whether widening the compact CNN from `16,32,64` to `32,64,128` improves binary external-test performance while keeping the same 3-second, 64-mel input and the same validation macro-F1 checkpoint selection.
+
+### Input data
+
+```text
+train cache: data/features/subset_binary_train_1000_logmel_3s_64mels.npz
+eval cache:  data/features/subset_binary_test_1000_logmel_3s_64mels.npz
+train rows: 2000 total, split into 1600 train / 400 validation
+eval rows:  2000
+classes:    binary target_label, balanced 1000/1000 external eval
+```
+
+### Code change
+
+`src/train_cnn_logmel.py` now accepts `--channels`, for example `16,32,64` or `32,64,128`. The classifier input size is derived from the final channel count.
+
+### Command
+
+```bash
+.venv/bin/python -m src.train_cnn_logmel \
+  --features-path data/features/subset_binary_train_1000_logmel_3s_64mels.npz \
+  --eval-features-path data/features/subset_binary_test_1000_logmel_3s_64mels.npz \
+  --artifacts-dir artifacts \
+  --run-name cnn_logmel_binary_1000_wide_60ep_f1_scheduler \
+  --epochs 60 \
+  --batch-size 64 \
+  --learning-rate 0.001 \
+  --weight-decay 0.0001 \
+  --dropout 0.25 \
+  --channels 32,64,128 \
+  --scheduler reduce_on_plateau \
+  --lr-factor 0.5 \
+  --lr-patience 5 \
+  --patience 12 \
+  --seed 42
+```
+
+### Important parameters
+
+```text
+model: CompactLogMelCNN
+channels: 32,64,128
+device: cpu
+epochs requested: 60
+epochs completed: 19
+early stopping: yes
+best epoch: 7
+best validation macro F1: 0.6172
+best threshold: 0.50
+```
+
+### External test result
+
+```text
+              precision    recall  f1-score   support
+
+           0     0.6093    0.6440    0.6262      1000
+           1     0.6225    0.5870    0.6042      1000
+
+    accuracy                         0.6155      2000
+   macro avg     0.6159    0.6155    0.6152      2000
+weighted avg     0.6159    0.6155    0.6152      2000
+```
+
+### Comparison table
+
+```text
+run                                           | model            | data/subset            | key parameters                             | accuracy | macro F1 | interpretation
+----------------------------------------------|------------------|------------------------|--------------------------------------------|----------|----------|----------------
+sklearn_svm_rbf_binary_1000_tuned              | RBF-SVM          | binary train/test 1000 | tuned C/gamma, cached sklearn features     | 0.7200   | 0.7195   | strongest current baseline
+cnn_logmel_binary_1000_60ep_f1_scheduler       | CompactLogMelCNN | 3s, 64-mel log-mel     | channels 16,32,64; best val-F1 checkpoint  | 0.6260   | 0.6253   | best CNN so far, still below SVM
+cnn_logmel_binary_1000_wide_60ep_f1_scheduler  | CompactLogMelCNN | 3s, 64-mel log-mel     | channels 32,64,128; best val-F1 checkpoint | 0.6155   | 0.6152   | widening alone did not help
+```
+
+### SVM / wide-CNN comparison
+
+Command:
+
+```bash
+.venv/bin/python -m src.compare_predictions \
+  --left artifacts/sklearn_svm_rbf_binary_1000_tuned/predictions.csv \
+  --left-name svm \
+  --right artifacts/cnn_logmel_binary_1000_wide_60ep_f1_scheduler/predictions.csv \
+  --right-name cnn_wide \
+  --output-dir artifacts/compare_svm_tuned_vs_cnn_logmel_wide_60ep_f1_scheduler
+```
+
+Overall:
+
+```text
+rows: 2000
+svm correct:      1440 / 2000 = 0.7200
+cnn_wide correct: 1231 / 2000 = 0.6155
+
+both_correct:          994
+svm_only_correct:      446
+cnn_wide_only_correct: 237
+both_wrong:            323
+```
+
+### Interpretation
+
+The wider `32,64,128` CNN underperformed the previous `16,32,64` CNN:
+
+```text
+previous CNN macro F1: 0.6253
+wide CNN macro F1:     0.6152
+delta:                -0.0101
+```
+
+This suggests that model width alone is not the missing factor for the current 3-second, 64-mel input. The next local experiment should change input duration and frequency resolution, using the already available `6s_80mels` caches.
+
+### Limitations
+
+Only one random seed was tested. The run used the same simple CNN topology and only changed channel widths. No human label validation has been incorporated yet.
+
+### Artifacts
+
+```text
+artifacts/cnn_logmel_binary_1000_wide_60ep_f1_scheduler/metrics.json
+artifacts/cnn_logmel_binary_1000_wide_60ep_f1_scheduler/training_curves.csv
+artifacts/cnn_logmel_binary_1000_wide_60ep_f1_scheduler/training_curves.png
+artifacts/cnn_logmel_binary_1000_wide_60ep_f1_scheduler/threshold_results.csv
+artifacts/cnn_logmel_binary_1000_wide_60ep_f1_scheduler/validation_predictions.csv
+artifacts/cnn_logmel_binary_1000_wide_60ep_f1_scheduler/predictions.csv
+artifacts/cnn_logmel_binary_1000_wide_60ep_f1_scheduler/model.pt
+
+artifacts/compare_svm_tuned_vs_cnn_logmel_wide_60ep_f1_scheduler/summary.json
+artifacts/compare_svm_tuned_vs_cnn_logmel_wide_60ep_f1_scheduler/comparison.csv
+artifacts/compare_svm_tuned_vs_cnn_logmel_wide_60ep_f1_scheduler/comparison_by_label.csv
+```
+
+### Next step
+
+Run the same CNN training protocol on:
+
+```text
+data/features/subset_binary_train_1000_logmel_6s_80mels.npz
+data/features/subset_binary_test_1000_logmel_6s_80mels.npz
+```
+
+
+## 2026-05-22 - CNN on 6s/80-mel log-mel cache
+
+### Goal / hypothesis
+
+Check whether a longer input window and higher mel resolution improve CNN performance compared with the best previous 3-second, 64-mel CNN baseline.
+
+### Input data
+
+```text
+train cache: data/features/subset_binary_train_1000_logmel_6s_80mels.npz
+eval cache:  data/features/subset_binary_test_1000_logmel_6s_80mels.npz
+train rows: 2000 total, split into 1600 train / 400 validation
+eval rows:  2000
+sample rate: 16000
+duration: 6.0 seconds
+n_mels: 80
+feature shape: 80 x 188
+```
+
+### Command
+
+```bash
+.venv/bin/python -m src.train_cnn_logmel \
+  --features-path data/features/subset_binary_train_1000_logmel_6s_80mels.npz \
+  --eval-features-path data/features/subset_binary_test_1000_logmel_6s_80mels.npz \
+  --artifacts-dir artifacts \
+  --run-name cnn_logmel_binary_1000_6s80mels_60ep_f1_scheduler \
+  --epochs 60 \
+  --batch-size 64 \
+  --learning-rate 0.001 \
+  --weight-decay 0.0001 \
+  --dropout 0.25 \
+  --channels 16,32,64 \
+  --scheduler reduce_on_plateau \
+  --lr-factor 0.5 \
+  --lr-patience 5 \
+  --patience 12 \
+  --seed 42
+```
+
+### Important parameters
+
+```text
+model: CompactLogMelCNN
+channels: 16,32,64
+device: cpu
+epochs requested: 60
+epochs completed: 31
+early stopping: yes
+best epoch: 19
+best validation accuracy: 0.6225
+best validation macro F1: 0.6196
+best threshold: 0.50
+```
+
+### External test result
+
+```text
+              precision    recall  f1-score   support
+
+           0     0.6047    0.7510    0.6699      1000
+           1     0.6715    0.5090    0.5791      1000
+
+    accuracy                         0.6300      2000
+   macro avg     0.6381    0.6300    0.6245      2000
+weighted avg     0.6381    0.6300    0.6245      2000
+```
+
+### Comparison table
+
+```text
+run                                           | model            | data/subset            | key parameters                             | accuracy | macro F1 | interpretation
+----------------------------------------------|------------------|------------------------|--------------------------------------------|----------|----------|----------------
+sklearn_svm_rbf_binary_1000_tuned              | RBF-SVM          | binary train/test 1000 | tuned C/gamma, cached sklearn features     | 0.7200   | 0.7195   | strongest current baseline
+cnn_logmel_binary_1000_60ep_f1_scheduler       | CompactLogMelCNN | 3s, 64-mel log-mel     | channels 16,32,64; best val-F1 checkpoint  | 0.6260   | 0.6253   | best CNN macro F1 so far
+cnn_logmel_binary_1000_wide_60ep_f1_scheduler  | CompactLogMelCNN | 3s, 64-mel log-mel     | channels 32,64,128; best val-F1 checkpoint | 0.6155   | 0.6152   | widening alone did not help
+cnn_logmel_binary_1000_6s80mels_60ep_f1_scheduler | CompactLogMelCNN | 6s, 80-mel log-mel  | channels 16,32,64; best val-F1 checkpoint  | 0.6300   | 0.6245   | accuracy improved, macro F1 roughly tied with best CNN
+```
+
+### SVM / 6s80-CNN comparison
+
+Command:
+
+```bash
+.venv/bin/python -m src.compare_predictions \
+  --left artifacts/sklearn_svm_rbf_binary_1000_tuned/predictions.csv \
+  --left-name svm \
+  --right artifacts/cnn_logmel_binary_1000_6s80mels_60ep_f1_scheduler/predictions.csv \
+  --right-name cnn_6s80 \
+  --output-dir artifacts/compare_svm_tuned_vs_cnn_logmel_6s80mels_60ep_f1_scheduler
+```
+
+Overall:
+
+```text
+rows: 2000
+svm correct:      1440 / 2000 = 0.7200
+cnn_6s80 correct: 1260 / 2000 = 0.6300
+
+both_correct:          1017
+svm_only_correct:      423
+cnn_6s80_only_correct: 243
+both_wrong:            317
+```
+
+### Interpretation
+
+The 6-second, 80-mel input improved accuracy over the previous 3-second CNN:
+
+```text
+3s/64mels CNN accuracy:  0.6260
+6s/80mels CNN accuracy: 0.6300
+```
+
+Macro F1 did not improve materially:
+
+```text
+3s/64mels CNN macro F1:  0.6253
+6s/80mels CNN macro F1: 0.6245
+```
+
+The model became more conservative for `target_label=1`: class 0 recall rose to `0.7510`, while class 1 recall fell to `0.5090`. For the thesis this is useful as evidence that longer context/finer mel resolution alone is not enough; it changes the error balance but does not close the gap to the tuned SVM.
+
+### Limitations
+
+Only one random seed was tested. The threshold grid selected `0.50`, so no threshold adjustment improved validation macro F1. No manual label validation has been incorporated yet.
+
+### Artifacts
+
+```text
+artifacts/cnn_logmel_binary_1000_6s80mels_60ep_f1_scheduler/metrics.json
+artifacts/cnn_logmel_binary_1000_6s80mels_60ep_f1_scheduler/training_curves.csv
+artifacts/cnn_logmel_binary_1000_6s80mels_60ep_f1_scheduler/training_curves.png
+artifacts/cnn_logmel_binary_1000_6s80mels_60ep_f1_scheduler/threshold_results.csv
+artifacts/cnn_logmel_binary_1000_6s80mels_60ep_f1_scheduler/validation_predictions.csv
+artifacts/cnn_logmel_binary_1000_6s80mels_60ep_f1_scheduler/predictions.csv
+artifacts/cnn_logmel_binary_1000_6s80mels_60ep_f1_scheduler/model.pt
+
+artifacts/compare_svm_tuned_vs_cnn_logmel_6s80mels_60ep_f1_scheduler/summary.json
+artifacts/compare_svm_tuned_vs_cnn_logmel_6s80mels_60ep_f1_scheduler/comparison.csv
+artifacts/compare_svm_tuned_vs_cnn_logmel_6s80mels_60ep_f1_scheduler/comparison_by_label.csv
+```
+
+### Next step
+
+Try a targeted change that addresses class-balance behavior instead of only input size, for example class-weighted loss or a threshold policy chosen for the external validation objective. Keep the tuned SVM as the current main baseline.
+
+
+## 2026-05-23 - Add runtime timing metrics to CNN training
+
+### Goal / hypothesis
+
+Make future CNN experiment durations reproducible instead of estimating training time from memory.
+
+### Input data
+
+No dataset was processed in this step. This was a training-script instrumentation change.
+
+### Code change
+
+`src/train_cnn_logmel.py` now records timing fields in `metrics.json`:
+
+```text
+started_at
+finished_at
+duration_seconds
+mean_epoch_seconds
+```
+
+Each training history row, and therefore `training_curves.csv`, now also includes:
+
+```text
+epoch_duration_seconds
+```
+
+The epoch progress printout includes `epoch_sec=...`, and the final output prints total duration and mean epoch duration.
+
+### Commands used
+
+```bash
+.venv/bin/python -m py_compile src/train_cnn_logmel.py
+.venv/bin/python -m src.train_cnn_logmel --help
+```
+
+### Metrics / artifacts
+
+No model metrics were produced. Validation commands completed successfully.
+
+### Interpretation
+
+Future CNN runs will have exact wall-clock duration and per-epoch timing in their artifacts. Existing runs still only have approximate times unless re-run.
+
+### Limitations
+
+Timing is wall-clock timing on the local machine and depends on CPU/GPU availability and system load.
+
+### Next step
+
+Use these timing fields in the next CNN diagnostic run, likely an overfit test or a class-balance experiment.
+
+
+## 2026-05-24 - CNN without final adaptive pooling
+
+### Goal / hypothesis
+
+Test whether removing the final `AdaptiveAvgPool2d((1, 1))` helps the CNN retain more time-frequency information before classification.
+
+### Input data
+
+```text
+train cache: data/features/subset_binary_train_1000_logmel_3s_64mels.npz
+eval cache:  data/features/subset_binary_test_1000_logmel_3s_64mels.npz
+train rows: 1600
+validation rows: 400
+eval rows: 2000
+sample_rate: 16000
+duration: 3.0 seconds
+n_mels: 64
+feature shape: 64 x 94
+```
+
+### Command
+
+```bash
+.venv/bin/python -m src.train_cnn_logmel \
+  --features-path data/features/subset_binary_train_1000_logmel_3s_64mels.npz \
+  --eval-features-path data/features/subset_binary_test_1000_logmel_3s_64mels.npz \
+  --artifacts-dir artifacts \
+  --run-name cnn_logmel_binary_1000_no_final_pool_60ep_f1_scheduler \
+  --epochs 60 \
+  --batch-size 64 \
+  --learning-rate 0.001 \
+  --weight-decay 0.0001 \
+  --dropout 0.25 \
+  --channels 16,32,64 \
+  --pool-output-size 0 \
+  --scheduler reduce_on_plateau \
+  --lr-factor 0.5 \
+  --lr-patience 5 \
+  --patience 12 \
+  --seed 42
+```
+
+### Important parameters
+
+```text
+pool_output_size: 0
+classifier_input_features: 23552
+training device: cpu
+epochs completed: 46 / 60
+early stopping: yes
+best epoch: 34
+best validation macro F1: 0.6298
+duration_seconds: 310.8
+mean_epoch_seconds: 6.6
+```
+
+### External test result
+
+```text
+              precision    recall  f1-score   support
+
+           0     0.6094    0.6850    0.6450      1000
+           1     0.6404    0.5610    0.5981      1000
+
+    accuracy                         0.6230      2000
+   macro avg     0.6249    0.6230    0.6215      2000
+weighted avg     0.6249    0.6230    0.6215      2000
+```
+
+### Comparison table
+
+```text
+run                                              | model            | data/subset        | key parameters                            | accuracy | macro F1 | interpretation
+-------------------------------------------------|------------------|--------------------|-------------------------------------------|----------|----------|----------------
+sklearn_svm_rbf_binary_1000_tuned                 | RBF-SVM          | binary test 1000   | tuned C/gamma, cached sklearn features    | 0.7200   | 0.7195   | strongest current baseline
+cnn_logmel_binary_1000_60ep_f1_scheduler          | CompactLogMelCNN | 3s, 64-mel log-mel | pool 1x1, channels 16,32,64               | 0.6260   | 0.6253   | best CNN macro F1 so far
+cnn_logmel_binary_1000_no_final_pool_60ep_f1_scheduler | CompactLogMelCNN | 3s, 64-mel log-mel | no final adaptive pool, 23552 classifier inputs | 0.6230 | 0.6215 | retained more information but did not improve external generalization
+```
+
+### Interpretation
+
+Removing final adaptive pooling let the model fit the training split much more strongly; train accuracy reached about `0.94`, while previous compact CNN runs looked closer to underfit. Validation best macro F1 also reached `0.6298`, slightly above the previous validation score. However, external macro F1 fell to `0.6215`, below the previous best CNN `0.6253`.
+
+This suggests the old `AdaptiveAvgPool2d((1, 1))` was likely too aggressive, but fully removing it overfits or learns validation-specific details. A compromise such as `AdaptiveAvgPool2d((4, 4))` or a smaller MLP head is the next architectural test.
+
+### Limitations
+
+Only one seed was tested. No comparison CSV against SVM was generated before the session was interrupted. Generated artifacts are in `artifacts/` and are not included in the project handoff archive.
+
+### Artifacts
+
+```text
+artifacts/cnn_logmel_binary_1000_no_final_pool_60ep_f1_scheduler/metrics.json
+artifacts/cnn_logmel_binary_1000_no_final_pool_60ep_f1_scheduler/training_curves.csv
+artifacts/cnn_logmel_binary_1000_no_final_pool_60ep_f1_scheduler/training_curves.png
+artifacts/cnn_logmel_binary_1000_no_final_pool_60ep_f1_scheduler/threshold_results.csv
+artifacts/cnn_logmel_binary_1000_no_final_pool_60ep_f1_scheduler/validation_predictions.csv
+artifacts/cnn_logmel_binary_1000_no_final_pool_60ep_f1_scheduler/predictions.csv
+artifacts/cnn_logmel_binary_1000_no_final_pool_60ep_f1_scheduler/model.pt
+```
+
+### Next step
+
+Try `--pool-output-size 4` on the same 3s/64-mel cache as a compromise between global average pooling and no final pooling.
+
+
+## 2026-05-27 - Thesis-ready log-mel illustration package
+
+### Goal / hypothesis
+
+Generate a compact, reproducible set of log-mel figures for the thesis methodology, dataset description, and model error-analysis sections.
+
+### Input data
+
+```text
+CNN predictions: artifacts/cnn_logmel_binary_1000_60ep_f1_scheduler/predictions.csv
+SVM predictions: artifacts/sklearn_svm_rbf_binary_1000_tuned/predictions.csv
+Audio source: external test subset paths referenced by the prediction files
+```
+
+### Code and command
+
+Added:
+
+```text
+src/export_thesis_mel_figures.py
+```
+
+Command:
+
+```bash
+.venv/bin/python -m src.export_thesis_mel_figures \
+  --output-dir artifacts/thesis_mel_figures
+```
+
+Validation:
+
+```bash
+.venv/bin/python -m py_compile src/export_thesis_mel_figures.py
+```
+
+### Important parameters
+
+```text
+sample_rate: 16000 Hz
+duration: 3.0 s
+n_mels: 64
+color map: magma
+color range: -80 to 0 dB relative to each clip maximum
+export resolution: 300 dpi
+```
+
+Figures are regenerated from audio in log-mel dB space before the per-clip standardization used for CNN tensor input.
+
+### Selection protocol
+
+```text
+figure 01: highest-confidence correctly classified positive example from the best CNN
+figure 02: highest-confidence CNN-correct positive and negative class examples
+figure 03: highest-confidence CNN-correct examples for positive, sad, and angry source labels
+figure 04: one example each from both_correct, SVM_only_correct, CNN_only_correct, and both_wrong; prioritised by model probability disagreement
+```
+
+Each panel's audio path, source/target label, predicted labels and positive probabilities are recorded in `provenance.csv`.
+
+### Comparison table for models illustrated
+
+```text
+run                                      | model            | data/subset            | key parameters                           | accuracy | macro F1 | interpretation
+-----------------------------------------|------------------|------------------------|------------------------------------------|----------|----------|----------------
+sklearn_svm_rbf_binary_1000_tuned        | RBF-SVM          | binary external test   | tuned C/gamma, summary features          | 0.7200   | 0.7195   | strongest baseline shown in error figure
+cnn_logmel_binary_1000_60ep_f1_scheduler | CompactLogMelCNN | 3s, 64-mel log-mel     | channels 16,32,64; best val-F1 checkpoint | 0.6260   | 0.6253   | best CNN macro F1 shown in figures
+```
+
+### Generated artifacts
+
+```text
+artifacts/thesis_mel_figures/figure_01_logmel_input_example.png
+artifacts/thesis_mel_figures/figure_02_class_examples_positive_vs_nonpositive.png
+artifacts/thesis_mel_figures/figure_03_emotion_examples_positive_sad_angry.png
+artifacts/thesis_mel_figures/figure_04_error_analysis_best_cnn_vs_svm.png
+artifacts/thesis_mel_figures/provenance.csv
+artifacts/thesis_mel_figures/README.md
+```
+
+Output validation:
+
+```text
+figure_01_logmel_input_example.png:                 2100 x 1200 px, 300 dpi
+figure_02_class_examples_positive_vs_nonpositive.png: 2796 x 1233 px, 300 dpi
+figure_03_emotion_examples_positive_sad_angry.png:  3488 x 1233 px, 300 dpi
+figure_04_error_analysis_best_cnn_vs_svm.png:        2941 x 2277 px, 300 dpi
+```
+
+### Interpretation
+
+The package gives thesis-ready visuals tied to recorded model results rather than arbitrary samples. The error-analysis figure exposes model agreement/disagreement together with labels and `P(+)`, while the three class-oriented figures illustrate input construction and class composition.
+
+### Limitations
+
+Selections are representative by deterministic confidence/disagreement rules, not by human qualitative judgement. Color values are dB relative to the maximum within each clip, so panels compare time-frequency structure rather than absolute recording loudness. Manual review can replace selected examples if any audio is noisy or unsuitable for publication.
+
+### Next step
+
+Let Diana review the four PNG figures and `provenance.csv`; revise figure captions or substitute samples only if needed for the final thesis layout.
+
+
+## 2026-05-31 - Local DUSHA archive extraction on GPU workstation
+
+### Goal / hypothesis
+
+Prepare the transferred local DUSHA data directory for GPU-side CNN experiments by unpacking the audio archives under `data/dusha_emotion_audio/data`.
+
+### Input data
+
+```text
+train archive: data/dusha_emotion_audio/data/train.tar.gz
+test archive:  data/dusha_emotion_audio/data/test.tar.gz
+train archive size: 8.5G
+test archive size: 2.1G
+train metadata CSV: data/dusha_emotion_audio/data/train.csv
+test metadata CSV:  data/dusha_emotion_audio/data/test.csv
+```
+
+### Commands / checks
+
+```bash
+find data/dusha_emotion_audio/data -maxdepth 2 -type f | sort | head -n 40
+tar -tzf data/dusha_emotion_audio/data/train.tar.gz
+tar -tzf data/dusha_emotion_audio/data/test.tar.gz
+tar -xzf data/dusha_emotion_audio/data/train.tar.gz -C data/dusha_emotion_audio/data
+tar -xzf data/dusha_emotion_audio/data/test.tar.gz -C data/dusha_emotion_audio/data
+gzip -t data/dusha_emotion_audio/data/train.tar.gz
+gzip -t data/dusha_emotion_audio/data/test.tar.gz
+df -h . data/dusha_emotion_audio/data
+find data/dusha_emotion_audio/data/train -type f -name '*.wav' | wc -l
+find data/dusha_emotion_audio/data/test -type f -name '*.wav' | wc -l
+wc -l data/dusha_emotion_audio/data/train.csv data/dusha_emotion_audio/data/test.csv
+```
+
+### Results
+
+```text
+test extraction: completed successfully
+test wav files: 24171
+test.csv lines: 24172 including header
+test archive integrity: gzip -t completed successfully
+
+train extraction: failed
+train wav files after partial extraction: 26011
+train.csv lines: 96681 including header
+train archive integrity: failed
+gzip error: invalid compressed data--crc error; invalid compressed data--length error
+
+free disk space on /mnt/data4: about 3.0T available
+```
+
+### Comparison table
+
+```text
+run | model | data/subset | key parameters | accuracy | macro F1 | interpretation
+----|-------|-------------|----------------|----------|----------|----------------
+archive_extract_2026_05_31 | n/a | DUSHA local train/test archives | tar extraction and gzip integrity checks | n/a | n/a | test split is usable; train archive is corrupted and only partially extracted
+```
+
+### Interpretation
+
+The local `test` split is ready for scripts that require audio files. The local `train` split is not ready because `train.tar.gz` is corrupted or incomplete. The failure is not caused by lack of disk space.
+
+### Limitations
+
+The partially extracted `data/dusha_emotion_audio/data/train/` directory contains only about 27% of the expected train wav files. Any experiment depending on raw train audio should wait until `train.tar.gz` is replaced and extracted cleanly.
+
+### Next step
+
+Replace or re-download `data/dusha_emotion_audio/data/train.tar.gz`, then re-run extraction and `gzip -t` validation before GPU CNN training from raw audio or rebuilding log-mel caches.
+
+
+## 2026-05-31 - DUSHA train/test archive extraction completed locally
+
+### Goal / hypothesis
+
+Unpack the local DUSHA `train.tar.gz` and `test.tar.gz` archives into usable raw-audio directories for the next inspection and baseline steps.
+
+### Input data
+
+```text
+train archive: data/dusha_emotion_audio/data/train.tar.gz
+test archive:  data/dusha_emotion_audio/data/test.tar.gz
+train archive size: 8.5G
+test archive size: 2.1G
+metadata: data/dusha_emotion_audio/data/train.csv, data/dusha_emotion_audio/data/test.csv
+```
+
+### Commands / checks
+
+```bash
+df -h .
+find data/dusha_emotion_audio/data -maxdepth 1 -type d -print
+tar -xzf data/dusha_emotion_audio/data/train.tar.gz -C data/dusha_emotion_audio/data --keep-old-files
+tar -xzf data/dusha_emotion_audio/data/test.tar.gz -C data/dusha_emotion_audio/data --keep-old-files
+find data/dusha_emotion_audio/data/train -type f -name '*.wav' | wc -l
+find data/dusha_emotion_audio/data/test -type f -name '*.wav' | wc -l
+du -sh data/dusha_emotion_audio/data/train data/dusha_emotion_audio/data/test
+wc -l data/dusha_emotion_audio/data/train.csv data/dusha_emotion_audio/data/test.csv
+```
+
+### Results
+
+```text
+free disk space before extraction: 491G available
+train extraction: completed successfully
+test extraction: completed successfully
+train wav files: 96680
+test wav files: 24171
+train directory size: 14G
+test directory size: 3.4G
+train.csv lines: 96681 including header
+test.csv lines: 24172 including header
+artifact paths:
+  data/dusha_emotion_audio/data/train/
+  data/dusha_emotion_audio/data/test/
+```
+
+### Comparison table
+
+```text
+run | model | data/subset | key parameters | accuracy | macro F1 | interpretation
+----|-------|-------------|----------------|----------|----------|----------------
+archive_extract_2026_05_31_complete | n/a | DUSHA local train/test archives | tar extraction with --keep-old-files; wav counts checked against CSV row counts | n/a | n/a | train and test raw-audio directories are now complete by file-count check
+```
+
+### Interpretation
+
+Both raw-audio splits are available locally. The `.wav` counts match the metadata row counts excluding headers, so the extracted directories are suitable for dataset inspection and CPU-friendly sklearn baseline preparation.
+
+### Limitations
+
+This step validates file counts and successful `tar` exit status only. It does not yet verify every `.wav` header, audio duration, label distribution, or checksum against an external manifest.
+
+### Next step
+
+Run the DUSHA inspection step on the extracted directories, then create the balanced subset for the sklearn baseline.
