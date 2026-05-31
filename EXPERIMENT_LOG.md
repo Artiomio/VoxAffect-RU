@@ -2722,3 +2722,119 @@ The experiment still uses the balanced 1000-per-class cached subset, not the ful
 ### Next step
 
 Build a larger balanced subset from the now-complete extracted data and repeat the best GPU configuration, or try a schedule with a lower starting learning rate and less aggressive decay around the 120-200 epoch window.
+
+
+## 2026-05-31 - 7-second log-mel duration probe
+
+### Goal / hypothesis
+
+Check whether increasing log-mel input duration from 6 seconds to 7 seconds improves the current best CNN configuration, before spending more effort on model architecture changes.
+
+### Input data
+
+```text
+train subset: data/processed/subset_binary_train_1000.csv
+test subset: data/processed/subset_binary_test_1000.csv
+train rows: 2000, balanced 1000 negative / 1000 positive
+test rows: 2000, balanced 1000 negative / 1000 positive
+duration distribution in train subset:
+  min 1.416s; p10 3.000s; p25 3.780s; median 4.700s; p75 5.760s; p90 7.180s; max 18.380s
+  >=3s: 1800; >=6s: 456; >=7s: 226; >=10s: 22
+duration distribution in test subset:
+  min 1.346s; p10 2.986s; p25 3.660s; median 4.640s; p75 5.600s; p90 6.934s; max 15.520s
+  >=3s: 1797; >=6s: 400; >=7s: 195; >=10s: 24
+```
+
+### Commands / scripts used
+
+```bash
+.venv/bin/python -m src.build_logmel_cache \
+  --subset-path data/processed/subset_binary_train_1000.csv \
+  --output data/features/subset_binary_train_1000_logmel_7s_80mels.npz \
+  --sample-rate 16000 \
+  --duration 7.0 \
+  --n-mels 80
+
+.venv/bin/python -m src.build_logmel_cache \
+  --subset-path data/processed/subset_binary_test_1000.csv \
+  --output data/features/subset_binary_test_1000_logmel_7s_80mels.npz \
+  --sample-rate 16000 \
+  --duration 7.0 \
+  --n-mels 80
+
+.venv/bin/python -m src.train_cnn_logmel \
+  --features-path data/features/subset_binary_train_1000_logmel_7s_80mels.npz \
+  --eval-features-path data/features/subset_binary_test_1000_logmel_7s_80mels.npz \
+  --run-name cnn_logmel_binary_1000_7s80mels_wide_pool4_1200ep_gpu \
+  --epochs 1200 \
+  --batch-size 128 \
+  --channels 32,64,128 \
+  --pool-output-size 4 \
+  --scheduler reduce_on_plateau \
+  --lr-factor 0.5 \
+  --lr-patience 10 \
+  --patience 120 \
+  --device cuda
+```
+
+### Important parameters
+
+```text
+sample_rate: 16000
+duration: 7.0
+n_mels: 80
+train cache shape: (2000, 80, 219)
+test cache shape: (2000, 80, 219)
+model: CompactLogMelCNN
+channels: [32, 64, 128]
+pool_output_size: 4
+classifier_input_features: 2048
+device: cuda
+torch: 2.11.0+cu128
+```
+
+### Metrics and artifacts
+
+```text
+train cache: data/features/subset_binary_train_1000_logmel_7s_80mels.npz, 80M
+test cache: data/features/subset_binary_test_1000_logmel_7s_80mels.npz, 79M
+run_name: cnn_logmel_binary_1000_7s80mels_wide_pool4_1200ep_gpu
+artifact dir: artifacts/cnn_logmel_binary_1000_7s80mels_wide_pool4_1200ep_gpu/
+artifact size: 1.1M
+epochs requested: 1200
+epochs completed: 220
+stopped early: true
+best epoch: 100
+best validation accuracy: 0.7800
+best validation macro F1: 0.7799
+best validation threshold: 0.60
+best threshold validation macro F1: 0.7847
+external eval accuracy: 0.7440
+external eval precision macro: 0.7509
+external eval recall macro: 0.7440
+external eval macro F1: 0.7422
+duration: 209.3 seconds
+mean epoch time: 0.94 seconds
+```
+
+### Comparison table
+
+```text
+run | model | data/subset | key parameters | accuracy | macro F1 | interpretation
+----|-------|-------------|----------------|----------|----------|----------------
+cnn_logmel_binary_1000_6s80mels_wide_pool4_120ep_gpu | CompactLogMelCNN | 1000/class, 6s/80mels | GPU; channels 32,64,128; pool 4; 120 epochs | 0.7450 | 0.7431 | strong 6s baseline
+cnn_logmel_binary_1000_6s80mels_wide_pool4_1200ep_gpu | CompactLogMelCNN | 1000/class, 6s/80mels | GPU; channels 32,64,128; pool 4; early stop at 281 | 0.7575 | 0.7575 | current best; duration 6s with longer schedule
+cnn_logmel_binary_1000_7s80mels_wide_pool4_1200ep_gpu | CompactLogMelCNN | 1000/class, 7s/80mels | GPU; channels 32,64,128; pool 4; early stop at 220 | 0.7440 | 0.7422 | 7s does not improve; likely adds padding/noise more than useful signal
+```
+
+### Interpretation
+
+Increasing the duration from 6s to 7s did not help on the current balanced 1000-per-class subset. Only 226/2000 train files and 195/2000 test files are at least 7 seconds long, so most examples either contain no extra signal beyond 6 seconds or add mostly padding. The 7s run underperforms the best 6s run on external macro F1.
+
+### Limitations
+
+This tests only one seed, one balanced subset size, and one architecture. It uses first-`duration` truncation rather than random crops or center crops. A longer duration might behave differently with full-dataset training, crop augmentation, or attention/pooling over time.
+
+### Next step
+
+Prioritize model/data tweaks over simply extending fixed duration to 7s: larger balanced subset, crop augmentation, alternative pooling/time aggregation, or a lower-LR schedule around the 100-200 epoch convergence region.
