@@ -4622,3 +4622,220 @@ If a fresh forward-pass validation test is needed, add or run a small evaluation
 script that reloads `model.pt`, rebuilds the same internal train/validation
 split from the feature cache, and writes a separate validation-eval artifact
 directory.
+
+## 2026-06-21 - Neutral vs emotional sklearn SVM baseline
+
+### Goal / hypothesis
+
+Start a separate `neutral_vs_emotional` task series without replacing the
+existing positive-vs-negative valence experiments. Hypothesis: a compact
+CPU-friendly SVM baseline can establish whether summary acoustic features
+separate neutral speech from emotionally colored speech.
+
+### Input data
+
+```text
+task: neutral_vs_emotional
+label 0: neutral
+label 1: emotional = positive + angry + sad
+excluded label: other
+train source: data/dusha_emotion_audio/data/train.csv
+test source: data/dusha_emotion_audio/data/test.csv
+train subset: data/processed/subset_neutral_vs_emotional_train_1000.csv
+test subset: data/processed/subset_neutral_vs_emotional_test_1000.csv
+train rows: 2000, balanced 1000 neutral / 1000 emotional
+test rows: 2000, balanced 1000 neutral / 1000 emotional
+train feature cache: data/features/subset_neutral_vs_emotional_train_1000_features.npz
+test feature cache: data/features/subset_neutral_vs_emotional_test_1000_features.npz
+feature count: 48
+```
+
+### Commands / scripts used
+
+```bash
+.venv/bin/python -m src.make_subset --data-dir data/dusha_emotion_audio/data --split train --task neutral_vs_emotional --samples-per-class 1000 --seed 42 --output data/processed/subset_neutral_vs_emotional_train_1000.csv
+.venv/bin/python -m src.make_subset --data-dir data/dusha_emotion_audio/data --split test --task neutral_vs_emotional --samples-per-class 1000 --seed 42 --output data/processed/subset_neutral_vs_emotional_test_1000.csv
+.venv/bin/python -m src.build_feature_cache --subset-path data/processed/subset_neutral_vs_emotional_train_1000.csv --output data/features/subset_neutral_vs_emotional_train_1000_features.npz --sample-rate 16000 --max-duration 6.0
+.venv/bin/python -m src.build_feature_cache --subset-path data/processed/subset_neutral_vs_emotional_test_1000.csv --output data/features/subset_neutral_vs_emotional_test_1000_features.npz --sample-rate 16000 --max-duration 6.0
+.venv/bin/python -m src.tune_sklearn --features-path data/features/subset_neutral_vs_emotional_train_1000_features.npz --eval-features-path data/features/subset_neutral_vs_emotional_test_1000_features.npz --artifacts-dir artifacts --run-name sklearn_svm_rbf_neutral_vs_emotional_1000_tuned --model svm_rbf --seed 42
+```
+
+### Important parameters
+
+```text
+model: StandardScaler + SVC(kernel='rbf')
+candidate count: 32
+C grid: 0.3, 1.0, 3.0, 10.0
+gamma grid: scale, 0.003, 0.01, 0.03
+class_weight grid: balanced, None
+threshold grid: 0.30..0.70 step 0.02
+best validation params: C=3.0, gamma=0.01, class_weight=balanced
+best validation threshold: 0.48
+validation rows: 400
+final train rows: 2000
+```
+
+### Metrics and artifacts
+
+```text
+run_name: sklearn_svm_rbf_neutral_vs_emotional_1000_tuned
+artifact dir: artifacts/sklearn_svm_rbf_neutral_vs_emotional_1000_tuned/
+best validation accuracy: 0.7050
+best validation macro F1: 0.7046
+external eval accuracy: 0.6620
+external eval precision macro: 0.6622
+external eval recall macro: 0.6620
+external eval macro F1: 0.6619
+neutral recall: 0.6780
+emotional recall: 0.6460
+metrics: artifacts/sklearn_svm_rbf_neutral_vs_emotional_1000_tuned/metrics.json
+tuning results: artifacts/sklearn_svm_rbf_neutral_vs_emotional_1000_tuned/tuning_results.csv
+classification report: artifacts/sklearn_svm_rbf_neutral_vs_emotional_1000_tuned/classification_report.txt
+confusion matrix: artifacts/sklearn_svm_rbf_neutral_vs_emotional_1000_tuned/confusion_matrix.png
+predictions: artifacts/sklearn_svm_rbf_neutral_vs_emotional_1000_tuned/predictions.csv
+```
+
+### Comparison table
+
+```text
+run | model | data/subset | key parameters | accuracy | macro F1 | interpretation
+----|-------|-------------|----------------|----------|----------|----------------
+sklearn_svm_rbf_binary_1000_tuned | StandardScaler + SVC(kernel='rbf') | positive vs negative, 1000/class train, 1000/class eval | 48 summary features; C=10.0; gamma=0.003; threshold=0.46 | 0.7200 | 0.7195 | old valence baseline, not directly comparable
+sklearn_svm_rbf_neutral_vs_emotional_1000_tuned | StandardScaler + SVC(kernel='rbf') | neutral vs emotional, 1000/class train, 1000/class eval | 48 summary features; C=3.0; gamma=0.01; threshold=0.48 | 0.6620 | 0.6619 | first arousal/proxy baseline; compact features are weak
+```
+
+### Interpretation
+
+The first `neutral_vs_emotional` SVM baseline is above chance but modest. The
+gap between validation macro F1 `0.7046` and external macro F1 `0.6619` suggests
+that this compact 48-feature representation does not generalize strongly for
+neutral/emotional separation. Neutral recall is slightly higher than emotional
+recall, so the model misses a meaningful share of emotional examples.
+
+### Limitations
+
+This is a single 1000/class subset and one seed. The positive class merges
+positive, angry, and sad into one heterogeneous emotional class. The term
+"emotional tension" should be treated as a proxy interpretation, not as a
+direct psychological measurement.
+
+### Next step
+
+Run a CNN/log-mel baseline for the same `neutral_vs_emotional` task, preferably
+using the 6s/80-mel setup and GPU, then compare against this compact-feature
+SVM baseline within the same task only.
+
+## 2026-06-21 - Neutral vs emotional CNN log-mel baseline
+
+### Goal / hypothesis
+
+Train the first CNN baseline for the new `neutral_vs_emotional` task on the
+same 1000/class train and test subsets used by the compact-feature SVM.
+Hypothesis: log-mel CNN features should improve over the 48-feature SVM
+baseline for neutral/emotional separation.
+
+### Input data
+
+```text
+task: neutral_vs_emotional
+label 0: neutral
+label 1: emotional = positive + angry + sad
+train subset: data/processed/subset_neutral_vs_emotional_train_1000.csv
+test subset: data/processed/subset_neutral_vs_emotional_test_1000.csv
+train cache: data/features/subset_neutral_vs_emotional_train_1000_logmel_6s_80mels_fft1024_hop256.npz
+test cache: data/features/subset_neutral_vs_emotional_test_1000_logmel_6s_80mels_fft1024_hop256.npz
+train rows: 2000, balanced 1000 neutral / 1000 emotional
+test rows: 2000, balanced 1000 neutral / 1000 emotional
+cache shape: (2000, 80, 376)
+```
+
+### Commands / scripts used
+
+```bash
+.venv/bin/python -m src.build_logmel_cache --subset-path data/processed/subset_neutral_vs_emotional_train_1000.csv --output data/features/subset_neutral_vs_emotional_train_1000_logmel_6s_80mels_fft1024_hop256.npz --sample-rate 16000 --duration 6.0 --n-mels 80 --n-fft 1024 --hop-length 256
+.venv/bin/python -m src.build_logmel_cache --subset-path data/processed/subset_neutral_vs_emotional_test_1000.csv --output data/features/subset_neutral_vs_emotional_test_1000_logmel_6s_80mels_fft1024_hop256.npz --sample-rate 16000 --duration 6.0 --n-mels 80 --n-fft 1024 --hop-length 256
+.venv/bin/python -m src.train_cnn_logmel --features-path data/features/subset_neutral_vs_emotional_train_1000_logmel_6s_80mels_fft1024_hop256.npz --eval-features-path data/features/subset_neutral_vs_emotional_test_1000_logmel_6s_80mels_fft1024_hop256.npz --run-name cnn_logmel_neutral_vs_emotional_1000_6s80mels_fft1024_hop256_pool6_hidden512_300ep_gpu --epochs 300 --batch-size 128 --channels 32,64,128 --pool-output-size 6 --classifier-hidden-size 512 --scheduler reduce_on_plateau --lr-factor 0.5 --lr-patience 10 --patience 50 --device cuda
+```
+
+### Important parameters
+
+```text
+model: CompactLogMelCNN
+input: 80x376 log-mel
+sample_rate: 16000
+duration: 6.0
+n_mels: 80
+n_fft: 1024
+hop_length: 256
+channels: 32,64,128
+adaptive pooling: 6x6
+classifier head: 4608 -> 512 -> 2
+dropout: 0.25
+optimizer: AdamW
+scheduler: ReduceLROnPlateau
+batch_size: 128
+epochs requested: 300
+early stopping patience: 50
+device: cuda
+GPU observed: NVIDIA GeForce RTX 3060 12GB, about 4.2 GiB VRAM used during training
+```
+
+### Metrics and artifacts
+
+```text
+run_name: cnn_logmel_neutral_vs_emotional_1000_6s80mels_fft1024_hop256_pool6_hidden512_300ep_gpu
+artifact dir: artifacts/cnn_logmel_neutral_vs_emotional_1000_6s80mels_fft1024_hop256_pool6_hidden512_300ep_gpu/
+epochs completed: 153
+stopped early: true
+best epoch: 103
+best validation accuracy: 0.7075
+best validation macro F1: 0.7073
+best validation threshold: 0.48
+best threshold validation macro F1: 0.7075
+external eval accuracy: 0.6940
+external eval precision macro: 0.6944
+external eval recall macro: 0.6940
+external eval macro F1: 0.6938
+neutral recall: 0.7170
+emotional recall: 0.6710
+duration: 244.6 seconds
+mean epoch time: 1.57 seconds
+metrics: artifacts/cnn_logmel_neutral_vs_emotional_1000_6s80mels_fft1024_hop256_pool6_hidden512_300ep_gpu/metrics.json
+model: artifacts/cnn_logmel_neutral_vs_emotional_1000_6s80mels_fft1024_hop256_pool6_hidden512_300ep_gpu/model.pt
+threshold results: artifacts/cnn_logmel_neutral_vs_emotional_1000_6s80mels_fft1024_hop256_pool6_hidden512_300ep_gpu/threshold_results.csv
+curves: artifacts/cnn_logmel_neutral_vs_emotional_1000_6s80mels_fft1024_hop256_pool6_hidden512_300ep_gpu/training_curves.png
+confusion matrix: artifacts/cnn_logmel_neutral_vs_emotional_1000_6s80mels_fft1024_hop256_pool6_hidden512_300ep_gpu/confusion_matrix.png
+predictions: artifacts/cnn_logmel_neutral_vs_emotional_1000_6s80mels_fft1024_hop256_pool6_hidden512_300ep_gpu/predictions.csv
+```
+
+### Comparison table
+
+```text
+run | model | data/subset | key parameters | accuracy | macro F1 | interpretation
+----|-------|-------------|----------------|----------|----------|----------------
+sklearn_svm_rbf_neutral_vs_emotional_1000_tuned | StandardScaler + SVC(kernel='rbf') | neutral vs emotional, 1000/class train, 1000/class eval | 48 summary features; C=3.0; gamma=0.01; threshold=0.48 | 0.6620 | 0.6619 | compact-feature baseline is weak but above chance
+cnn_logmel_neutral_vs_emotional_1000_6s80mels_fft1024_hop256_pool6_hidden512_300ep_gpu | CompactLogMelCNN | neutral vs emotional, 1000/class train, 1000/class eval | 80x376 log-mel; pool 6; head 4608->512->2; threshold=0.48 | 0.6940 | 0.6938 | first CNN baseline improves over SVM by about 0.032 macro F1
+cnn_logmel_binary_1000_6s80mels_wide_pool4_1200ep_gpu | CompactLogMelCNN | positive vs negative, 1000/class train, 1000/class eval | old valence task; 80x188; pool 4 | 0.7575 | 0.7575 | old task, not directly comparable
+```
+
+### Interpretation
+
+The CNN improves over the compact-feature SVM on the same `neutral_vs_emotional`
+subset, raising external macro F1 from `0.6619` to `0.6938`. The improvement
+supports using log-mel structure for the arousal/proxy task, but the score is
+still lower than the earlier positive-vs-negative CNN baseline on the old task.
+The new task may be genuinely harder, or the 1000/class sample may not capture
+the heterogeneity of the merged emotional class.
+
+### Limitations
+
+This is still one seed and one small 1000/class subset. The emotional class
+merges positive, angry, and sad, so future analysis should inspect per-source
+label recall inside class 1. The run reused a strong configuration from the old
+task rather than tuning specifically for neutral/emotional separation.
+
+### Next step
+
+Scale the `neutral_vs_emotional` CNN to a larger balanced subset, for example
+9000/class train and 2400/class test, then inspect source-label breakdown inside
+the emotional class.

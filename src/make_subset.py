@@ -29,6 +29,17 @@ THREE_CLASS_LABELS = {
     "neutral": "neutral",
 }
 
+NEUTRAL_VS_EMOTIONAL_LABELS = {
+    "neutral": 0,
+    "positive": 1,
+    "happiness": 1,
+    "happy": 1,
+    "angry": 1,
+    "anger": 1,
+    "sad": 1,
+    "sadness": 1,
+}
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -40,7 +51,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--split", default="train", help="Split CSV to read.")
     parser.add_argument(
         "--task",
-        choices=("binary", "3class"),
+        choices=("binary", "3class", "neutral_vs_emotional"),
         default="binary",
         help="Label mapping task.",
     )
@@ -72,12 +83,13 @@ def map_label(value: object, task: str) -> int | str | None:
     normalized = normalize_label(value)
     if task == "binary":
         return BINARY_LABELS.get(normalized)
+    if task == "neutral_vs_emotional":
+        return NEUTRAL_VS_EMOTIONAL_LABELS.get(normalized)
     return THREE_CLASS_LABELS.get(normalized)
 
 
 def default_output_path(task: str) -> Path:
-    suffix = "3class" if task == "3class" else "binary"
-    return Path("data/processed") / f"subset_{suffix}.csv"
+    return Path("data/processed") / f"subset_{task}.csv"
 
 
 def require_columns(df: pd.DataFrame, columns: tuple[str, ...], csv_path: Path) -> None:
@@ -127,7 +139,7 @@ def make_subset(args: argparse.Namespace) -> Path:
     mapped = df.dropna(subset=["target_label"]).copy()
     if mapped.empty:
         raise SystemExit("No rows left after label mapping.")
-    if args.task == "binary":
+    if args.task in {"binary", "neutral_vs_emotional"}:
         mapped["target_label"] = mapped["target_label"].astype(int)
 
     print_counts("Mapped Labels Before Balancing", mapped["target_label"])
