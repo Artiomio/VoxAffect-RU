@@ -4522,3 +4522,103 @@ evaluate model metrics, or manually test browser microphone permissions.
 
 Commit the source/documentation snapshot while leaving the generated `.tar.gz`
 archive untracked.
+
+## 2026-06-21 - Best CNN validation split metric check
+
+### Goal / hypothesis
+
+Recompute validation-split metrics for the current best documented CNN from its
+saved `validation_predictions.csv`, without retraining. Hypothesis: the saved
+validation predictions reproduce the validation metrics recorded in
+`metrics.json`.
+
+### Input data
+
+```text
+run: cnn_logmel_binary_9000_6s80mels_fft1024_hop256_wide_pool6_hidden512_1200ep_gpu
+validation predictions: artifacts/cnn_logmel_binary_9000_6s80mels_fft1024_hop256_wide_pool6_hidden512_1200ep_gpu/validation_predictions.csv
+metrics file: artifacts/cnn_logmel_binary_9000_6s80mels_fft1024_hop256_wide_pool6_hidden512_1200ep_gpu/metrics.json
+validation rows: 3600
+validation class balance: 1800 negative / 1800 positive
+```
+
+### Commands / scripts used
+
+```bash
+.venv/bin/python - <<'PY'
+from pathlib import Path
+import json
+import pandas as pd
+from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score, classification_report, confusion_matrix
+
+run = "cnn_logmel_binary_9000_6s80mels_fft1024_hop256_wide_pool6_hidden512_1200ep_gpu"
+base = Path("artifacts") / run
+df = pd.read_csv(base / "validation_predictions.csv")
+y = df["target_label"].astype(int)
+p = df["predicted_label"].astype(int)
+metrics = json.loads((base / "metrics.json").read_text())
+print(f"rows: {len(df)}")
+print(f"accuracy: {accuracy_score(y, p):.4f}")
+print(f"precision_macro: {precision_score(y, p, average='macro', zero_division=0):.4f}")
+print(f"recall_macro: {recall_score(y, p, average='macro', zero_division=0):.4f}")
+print(f"f1_macro: {f1_score(y, p, average='macro', zero_division=0):.4f}")
+print(f"best_epoch: {metrics.get('best_epoch')}")
+print(f"best_threshold: {metrics.get('best_threshold', {}).get('threshold')}")
+print(confusion_matrix(y, p))
+print(classification_report(y, p, digits=4, zero_division=0))
+PY
+```
+
+### Important parameters
+
+```text
+model: CompactLogMelCNN
+input: 80x376 log-mel, 6s audio, n_fft=1024, hop_length=256
+architecture: channels 32,64,128; adaptive pool 6x6; hidden head 4608->512->2
+best epoch: 87
+threshold: 0.50
+```
+
+### Metrics and artifacts
+
+```text
+accuracy: 0.8572
+precision_macro: 0.8575
+recall_macro: 0.8572
+macro F1: 0.8572
+confusion matrix:
+  true 0 predicted 0: 1567
+  true 0 predicted 1: 233
+  true 1 predicted 0: 281
+  true 1 predicted 1: 1519
+new artifacts: none
+```
+
+### Comparison table
+
+```text
+run | model | data/subset | key parameters | accuracy | macro F1 | interpretation
+----|-------|-------------|----------------|----------|----------|----------------
+cnn_logmel_binary_9000_6s80mels_fft1024_hop256_wide_pool6_hidden512_1200ep_gpu_validation_check | CompactLogMelCNN | internal validation split, 3600 rows | saved predictions; threshold 0.50; best epoch 87 | 0.8572 | 0.8572 | validation metrics reproduce the recorded best validation result
+cnn_logmel_binary_9000_6s80mels_fft1024_hop256_wide_pool6_hidden512_1200ep_gpu | CompactLogMelCNN | external test subset, 4800 rows | same checkpoint and threshold | 0.8475 | 0.8475 | external result is about 0.0097 macro F1 below validation
+```
+
+### Interpretation
+
+The validation split score is consistent with the saved training metrics. The
+external test score remains slightly lower than validation, so the model
+generalizes reasonably but the validation score should not be quoted as the
+final held-out result.
+
+### Limitations
+
+This is a post-hoc metric recomputation from saved predictions, not a fresh
+forward pass through the checkpoint and not a new training run. It does not test
+browser microphone behavior or audio decoding in the web demo.
+
+### Next step
+
+If a fresh forward-pass validation test is needed, add or run a small evaluation
+script that reloads `model.pt`, rebuilds the same internal train/validation
+split from the feature cache, and writes a separate validation-eval artifact
+directory.
