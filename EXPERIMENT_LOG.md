@@ -4839,3 +4839,140 @@ task rather than tuning specifically for neutral/emotional separation.
 Scale the `neutral_vs_emotional` CNN to a larger balanced subset, for example
 9000/class train and 2400/class test, then inspect source-label breakdown inside
 the emotional class.
+
+## 2026-06-21 - Neutral vs active emotional without sad
+
+### Goal / hypothesis
+
+Test a stricter arousal/proxy task that excludes `sad` from the emotional
+class: `0 = neutral`, `1 = active_emotional = positive + angry`. Hypothesis:
+removing `sad` should make the emotional class more acoustically coherent and
+improve both compact-feature SVM and log-mel CNN performance compared with the
+previous `neutral_vs_emotional` task.
+
+### Input data
+
+```text
+task: neutral_vs_active_emotional
+label 0: neutral
+label 1: active_emotional = positive + angry
+excluded labels: sad, other
+train subset: data/processed/subset_neutral_vs_active_emotional_train_1000.csv
+test subset: data/processed/subset_neutral_vs_active_emotional_test_1000.csv
+train rows: 2000, balanced 1000 neutral / 1000 active_emotional
+test rows: 2000, balanced 1000 neutral / 1000 active_emotional
+train source rows before balancing: neutral=63701, active_emotional=21839
+test source rows before balancing: neutral=15886, active_emotional=5553
+compact feature caches: 48 features, max_duration=6.0
+log-mel cache shape: (2000, 80, 376)
+```
+
+### Commands / scripts used
+
+```bash
+.venv/bin/python -m src.make_subset --data-dir data/dusha_emotion_audio/data --split train --task neutral_vs_active_emotional --samples-per-class 1000 --seed 42 --output data/processed/subset_neutral_vs_active_emotional_train_1000.csv
+.venv/bin/python -m src.make_subset --data-dir data/dusha_emotion_audio/data --split test --task neutral_vs_active_emotional --samples-per-class 1000 --seed 42 --output data/processed/subset_neutral_vs_active_emotional_test_1000.csv
+.venv/bin/python -m src.build_feature_cache --subset-path data/processed/subset_neutral_vs_active_emotional_train_1000.csv --output data/features/subset_neutral_vs_active_emotional_train_1000_features.npz --sample-rate 16000 --max-duration 6.0
+.venv/bin/python -m src.build_feature_cache --subset-path data/processed/subset_neutral_vs_active_emotional_test_1000.csv --output data/features/subset_neutral_vs_active_emotional_test_1000_features.npz --sample-rate 16000 --max-duration 6.0
+.venv/bin/python -m src.build_logmel_cache --subset-path data/processed/subset_neutral_vs_active_emotional_train_1000.csv --output data/features/subset_neutral_vs_active_emotional_train_1000_logmel_6s_80mels_fft1024_hop256.npz --sample-rate 16000 --duration 6.0 --n-mels 80 --n-fft 1024 --hop-length 256
+.venv/bin/python -m src.build_logmel_cache --subset-path data/processed/subset_neutral_vs_active_emotional_test_1000.csv --output data/features/subset_neutral_vs_active_emotional_test_1000_logmel_6s_80mels_fft1024_hop256.npz --sample-rate 16000 --duration 6.0 --n-mels 80 --n-fft 1024 --hop-length 256
+.venv/bin/python -m src.tune_sklearn --features-path data/features/subset_neutral_vs_active_emotional_train_1000_features.npz --eval-features-path data/features/subset_neutral_vs_active_emotional_test_1000_features.npz --artifacts-dir artifacts --run-name sklearn_svm_rbf_neutral_vs_active_emotional_1000_tuned --model svm_rbf --seed 42
+.venv/bin/python -m src.train_cnn_logmel --features-path data/features/subset_neutral_vs_active_emotional_train_1000_logmel_6s_80mels_fft1024_hop256.npz --eval-features-path data/features/subset_neutral_vs_active_emotional_test_1000_logmel_6s_80mels_fft1024_hop256.npz --run-name cnn_logmel_neutral_vs_active_emotional_1000_6s80mels_fft1024_hop256_pool6_hidden512_300ep_gpu --epochs 300 --batch-size 128 --channels 32,64,128 --pool-output-size 6 --classifier-hidden-size 512 --scheduler reduce_on_plateau --lr-factor 0.5 --lr-patience 10 --patience 50 --device cuda
+```
+
+### Important parameters
+
+```text
+subset seed: 42
+samples_per_class: 1000
+SVM model: StandardScaler + SVC(kernel='rbf')
+SVM selected params: C=10.0, gamma=0.03, class_weight=balanced
+SVM selected threshold: 0.54
+CNN model: CompactLogMelCNN
+CNN input: 80x376 log-mel
+CNN channels: 32,64,128
+CNN adaptive pooling: 6x6
+CNN classifier head: 4608 -> 512 -> 2
+CNN dropout: 0.25
+CNN optimizer: AdamW
+CNN scheduler: ReduceLROnPlateau
+CNN batch_size: 128
+CNN epochs requested: 300
+CNN early stopping patience: 50
+CNN device: cuda
+```
+
+### Metrics and artifacts
+
+```text
+run_name: sklearn_svm_rbf_neutral_vs_active_emotional_1000_tuned
+artifact dir: artifacts/sklearn_svm_rbf_neutral_vs_active_emotional_1000_tuned/
+best validation accuracy: 0.7475
+best validation macro F1: 0.7465
+external eval accuracy: 0.7145
+external eval precision macro: 0.7161
+external eval recall macro: 0.7145
+external eval macro F1: 0.7140
+neutral recall: 0.7580
+active_emotional recall: 0.6710
+metrics: artifacts/sklearn_svm_rbf_neutral_vs_active_emotional_1000_tuned/metrics.json
+tuning results: artifacts/sklearn_svm_rbf_neutral_vs_active_emotional_1000_tuned/tuning_results.csv
+confusion matrix: artifacts/sklearn_svm_rbf_neutral_vs_active_emotional_1000_tuned/confusion_matrix.png
+predictions: artifacts/sklearn_svm_rbf_neutral_vs_active_emotional_1000_tuned/predictions.csv
+
+run_name: cnn_logmel_neutral_vs_active_emotional_1000_6s80mels_fft1024_hop256_pool6_hidden512_300ep_gpu
+artifact dir: artifacts/cnn_logmel_neutral_vs_active_emotional_1000_6s80mels_fft1024_hop256_pool6_hidden512_300ep_gpu/
+epochs completed: 171
+stopped early: true
+best epoch: 121
+best validation accuracy: 0.7975
+best validation macro F1: 0.7971
+best validation threshold: 0.50
+external eval accuracy: 0.7720
+external eval precision macro: 0.7721
+external eval recall macro: 0.7720
+external eval macro F1: 0.7720
+neutral recall: 0.7790
+active_emotional recall: 0.7650
+duration: 270.6 seconds
+mean epoch time: 1.56 seconds
+metrics: artifacts/cnn_logmel_neutral_vs_active_emotional_1000_6s80mels_fft1024_hop256_pool6_hidden512_300ep_gpu/metrics.json
+model: artifacts/cnn_logmel_neutral_vs_active_emotional_1000_6s80mels_fft1024_hop256_pool6_hidden512_300ep_gpu/model.pt
+threshold results: artifacts/cnn_logmel_neutral_vs_active_emotional_1000_6s80mels_fft1024_hop256_pool6_hidden512_300ep_gpu/threshold_results.csv
+curves: artifacts/cnn_logmel_neutral_vs_active_emotional_1000_6s80mels_fft1024_hop256_pool6_hidden512_300ep_gpu/training_curves.png
+confusion matrix: artifacts/cnn_logmel_neutral_vs_active_emotional_1000_6s80mels_fft1024_hop256_pool6_hidden512_300ep_gpu/confusion_matrix.png
+predictions: artifacts/cnn_logmel_neutral_vs_active_emotional_1000_6s80mels_fft1024_hop256_pool6_hidden512_300ep_gpu/predictions.csv
+```
+
+### Comparison table
+
+```text
+run | model | data/subset | key parameters | accuracy | macro F1 | interpretation
+----|-------|-------------|----------------|----------|----------|----------------
+sklearn_svm_rbf_neutral_vs_emotional_1000_tuned | StandardScaler + SVC(kernel='rbf') | neutral vs emotional = positive+angry+sad, 1000/class train, 1000/class eval | 48 summary features; C=3.0; gamma=0.01; threshold=0.48 | 0.6620 | 0.6619 | baseline with heterogeneous emotional class
+cnn_logmel_neutral_vs_emotional_1000_6s80mels_fft1024_hop256_pool6_hidden512_300ep_gpu | CompactLogMelCNN | neutral vs emotional = positive+angry+sad, 1000/class train, 1000/class eval | 80x376 log-mel; pool 6; head 4608->512->2; threshold=0.48 | 0.6940 | 0.6938 | CNN improves over SVM but sad may blur class 1
+sklearn_svm_rbf_neutral_vs_active_emotional_1000_tuned | StandardScaler + SVC(kernel='rbf') | neutral vs active_emotional = positive+angry, sad excluded, 1000/class train, 1000/class eval | 48 summary features; C=10.0; gamma=0.03; threshold=0.54 | 0.7145 | 0.7140 | excluding sad improves SVM by about 0.052 macro F1
+cnn_logmel_neutral_vs_active_emotional_1000_6s80mels_fft1024_hop256_pool6_hidden512_300ep_gpu | CompactLogMelCNN | neutral vs active_emotional = positive+angry, sad excluded, 1000/class train, 1000/class eval | 80x376 log-mel; pool 6; head 4608->512->2; threshold=0.50 | 0.7720 | 0.7720 | excluding sad improves CNN by about 0.078 macro F1 and gives the best arousal/proxy result so far
+```
+
+### Interpretation
+
+Excluding `sad` substantially improves the neutral-vs-emotional experiment.
+The SVM rises from `0.6619` to `0.7140` macro F1, and the CNN rises from
+`0.6938` to `0.7720` macro F1. This supports the hypothesis that `sad` behaves
+less like high/active emotional speech and makes the merged emotional class less
+coherent. The new task is better framed as neutral vs active emotional intensity,
+not as all emotional speech vs neutral.
+
+### Limitations
+
+This is still a single seed and a 1000/class sample. The positive and angry
+components inside class 1 were not evaluated separately, so the model may be
+learning mostly anger, mostly positivity, or a mix. Direct comparison to the
+old `neutral_vs_emotional` task is useful but not perfectly controlled because
+the class-1 sampling pool changed after excluding `sad`.
+
+### Next step
+
+Inspect class-1 composition and per-source-label recall for positive vs angry,
+then repeat the `neutral_vs_active_emotional` CNN on a larger balanced subset.

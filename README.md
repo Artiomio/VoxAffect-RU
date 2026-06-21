@@ -97,6 +97,15 @@ excluded = neutral, other
 excluded = other
 ```
 
+Вариант `neutral_vs_active_emotional` исключает `sad` и проверяет более активную
+эмоциональную окраску:
+
+```text
+0 = neutral
+1 = active_emotional = positive + angry
+excluded = sad, other
+```
+
 Метрики этих задач нельзя напрямую сравнивать как "лучше/хуже": первая
 разделяет направление эмоции, вторая отделяет нейтральную речь от эмоциональной.
 
