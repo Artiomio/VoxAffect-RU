@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Vox Games Emotion Demo</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <section class="workspace" aria-labelledby="app-title">
+        <div class="topbar">
+          <div>
+            <h1 id="app-title">Vox Games</h1>
+            <p class="subtitle">positive / negative speech classifier</p>
+          </div>
+          <div class="status" id="status">Ready</div>
+        </div>
+
+        <div class="recording-surface">
+          <canvas id="meter" width="960" height="180" aria-hidden="true"></canvas>
+          <div class="timer" id="timer">00.0</div>
+        </div>
+
+        <div class="controls" aria-label="Recording controls">
+          <button class="primary" id="recordButton" type="button">Record</button>
+          <button id="stopButton" type="button" disabled>Stop</button>
+          <button id="predictButton" type="button" disabled>Analyze</button>
+        </div>
+
+        <audio id="playback" controls></audio>
+
+        <section class="result" id="result" aria-live="polite">
+          <div class="result-label" id="resultLabel">No result</div>
+          <div class="probabilities">
+            <div class="probability-row">
+              <span>positive</span>
+              <div class="bar"><span id="positiveBar"></span></div>
+              <strong id="positiveValue">0%</strong>
+            </div>
+            <div class="probability-row">
+              <span>negative</span>
+              <div class="bar"><span id="negativeBar"></span></div>
+              <strong id="negativeValue">0%</strong>
+            </div>
+          </div>
+        </section>
+      </section>
+    </main>
+    <script src="/static/app.js"></script>
+  </body>
+</html>

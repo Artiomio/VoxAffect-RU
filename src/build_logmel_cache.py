@@ -30,6 +30,24 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--sample-rate", type=int, default=16_000)
     parser.add_argument("--duration", type=float, default=3.0)
     parser.add_argument("--n-mels", type=int, default=64)
+    parser.add_argument(
+        "--n-fft",
+        type=int,
+        default=None,
+        help="FFT window size for librosa.feature.melspectrogram. Omit to use librosa default.",
+    )
+    parser.add_argument(
+        "--hop-length",
+        type=int,
+        default=None,
+        help="Hop length for librosa.feature.melspectrogram. Omit to use librosa default.",
+    )
+    parser.add_argument(
+        "--win-length",
+        type=int,
+        default=None,
+        help="Window length for librosa.feature.melspectrogram. Omit to use librosa default.",
+    )
     return parser.parse_args()
 
 
@@ -71,6 +89,9 @@ def main() -> None:
                 sample_rate=args.sample_rate,
                 duration=args.duration,
                 n_mels=args.n_mels,
+                n_fft=args.n_fft,
+                hop_length=args.hop_length,
+                win_length=args.win_length,
             )
         except Exception as exc:  # noqa: BLE001 - keep a baseline run moving.
             print(f"Skipping unreadable audio {audio_path}: {exc}")
@@ -97,6 +118,9 @@ def main() -> None:
             "sample_rate": args.sample_rate,
             "duration": args.duration,
             "n_mels": args.n_mels,
+            "n_fft": args.n_fft,
+            "hop_length": args.hop_length,
+            "win_length": args.win_length,
             "shape": list(tensor_array.shape),
         },
     )

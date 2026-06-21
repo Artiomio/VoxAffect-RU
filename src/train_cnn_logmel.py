@@ -40,10 +40,32 @@ def parse_args() -> argparse.Namespace:
         help="Comma-separated CNN channel sizes, for example 16,32,64 or 32,64,128.",
     )
     parser.add_argument(
+        "--conv-kernel-size",
+        default="3",
+        help="CNN kernel size as K or H,W. For example 3 keeps 3x3 kernels; 3,5 uses wider temporal kernels.",
+    )
+    parser.add_argument(
         "--pool-output-size",
         type=int,
         default=1,
         help="Final adaptive pooling output size. Use 1 for global average pooling, 4 for 4x4, or 0 to disable.",
+    )
+    parser.add_argument(
+        "--pool-kernel-size",
+        type=int,
+        default=2,
+        help="Kernel size for intermediate max-pooling layers.",
+    )
+    parser.add_argument(
+        "--pool-strides",
+        default="2",
+        help="Comma-separated strides for intermediate max-pooling layers. A single value is broadcast to all pools.",
+    )
+    parser.add_argument(
+        "--classifier-hidden-size",
+        type=int,
+        default=0,
+        help="Optional hidden dense layer size before the output layer. Use 0 for a direct linear head.",
     )
     parser.add_argument("--test-size", type=float, default=0.2)
     parser.add_argument("--seed", type=int, default=42)
@@ -80,20 +102,44 @@ class CompactLogMelCNN(nn.Module):
         channels: list[int],
         input_shape: tuple[int, int],
         pool_output_size: int,
+        conv_kernel_size: tuple[int, int] = (3, 3),
+        pool_kernel_size: int = 2,
+        pool_strides: list[int] | None = None,
+        classifier_hidden_size: int = 0,
         num_classes: int = 2,
         dropout: float = 0.25,
     ) -> None:
         super().__init__()
         if not channels:
             raise ValueError("channels must not be empty.")
+        if any(size < 1 for size in conv_kernel_size):
+            raise ValueError("conv_kernel_size must contain positive integers.")
         if pool_output_size < 0:
             raise ValueError("pool_output_size must be non-negative.")
+        if pool_kernel_size < 1:
+            raise ValueError("pool_kernel_size must be positive.")
+        if classifier_hidden_size < 0:
+            raise ValueError("classifier_hidden_size must be non-negative.")
+        expected_pool_layers = max(len(channels) - 1, 0)
+        if pool_strides is None:
+            pool_strides = [pool_kernel_size] * expected_pool_layers
+        if len(pool_strides) != expected_pool_layers:
+            raise ValueError(
+                "pool_strides must have one entry per intermediate pooling layer."
+            )
+        if any(stride < 1 for stride in pool_strides):
+            raise ValueError("pool_strides must contain positive integers.")
         layers = []
         in_channels = 1
         for index, out_channels in enumerate(channels):
             layers.extend(
                 [
-                    nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1),
+                    nn.Conv2d(
+                        in_channels,
+                        out_channels,
+                        kernel_size=conv_kernel_size,
+                        padding=(conv_kernel_size[0] // 2, conv_kernel_size[1] // 2),
+                    ),
                     nn.BatchNorm2d(out_channels),
                     nn.ReLU(),
                 ]
@@ -101,7 +147,7 @@ class CompactLogMelCNN(nn.Module):
             if index < len(channels) - 1:
                 layers.extend(
                     [
-                        nn.MaxPool2d(2),
+                        nn.MaxPool2d(pool_kernel_size, stride=pool_strides[index]),
                         nn.Dropout2d(dropout / 2 if index == 0 else dropout),
                     ]
                 )
@@ -109,17 +155,34 @@ class CompactLogMelCNN(nn.Module):
         if pool_output_size > 0:
             layers.append(nn.AdaptiveAvgPool2d((pool_output_size, pool_output_size)))
         self.features = nn.Sequential(*layers)
+        self.conv_kernel_size = conv_kernel_size
         self.pool_output_size = pool_output_size
+        self.pool_kernel_size = pool_kernel_size
+        self.pool_strides = pool_strides
         self.classifier_input_features = compute_classifier_input_features(
             input_shape=input_shape,
             channels=channels,
             pool_output_size=pool_output_size,
+            pool_kernel_size=pool_kernel_size,
+            pool_strides=pool_strides,
         )
-        self.classifier = nn.Sequential(
+        classifier_layers: list[nn.Module] = [
             nn.Flatten(),
             nn.Dropout(dropout),
-            nn.Linear(self.classifier_input_features, num_classes),
-        )
+        ]
+        if classifier_hidden_size > 0:
+            classifier_layers.extend(
+                [
+                    nn.Linear(self.classifier_input_features, classifier_hidden_size),
+                    nn.ReLU(),
+                    nn.Dropout(dropout),
+                    nn.Linear(classifier_hidden_size, num_classes),
+                ]
+            )
+        else:
+            classifier_layers.append(nn.Linear(self.classifier_input_features, num_classes))
+        self.classifier_hidden_size = classifier_hidden_size
+        self.classifier = nn.Sequential(*classifier_layers)
 
     def forward(self, inputs: torch.Tensor) -> torch.Tensor:
         return self.classifier(self.features(inputs))
@@ -151,18 +214,58 @@ def parse_channels(value: str) -> list[int]:
     return channels
 
 
+def parse_kernel_size(value: str) -> tuple[int, int]:
+    try:
+        sizes = [int(part.strip()) for part in value.split(",") if part.strip()]
+    except ValueError as exc:
+        raise SystemExit(f"Invalid --conv-kernel-size value: {value}") from exc
+    if len(sizes) == 1:
+        sizes = sizes * 2
+    if len(sizes) != 2 or any(size <= 0 for size in sizes):
+        raise SystemExit(f"--conv-kernel-size must be K or H,W with positive integers: {value}")
+    if any(size % 2 == 0 for size in sizes):
+        raise SystemExit(f"--conv-kernel-size must use odd sizes to preserve feature-map shape: {value}")
+    return sizes[0], sizes[1]
+
+
+def parse_pool_strides(value: str, expected_pool_layers: int) -> list[int]:
+    try:
+        strides = [int(part.strip()) for part in value.split(",") if part.strip()]
+    except ValueError as exc:
+        raise SystemExit(f"Invalid --pool-strides value: {value}") from exc
+    if not strides or any(stride <= 0 for stride in strides):
+        raise SystemExit(f"--pool-strides must contain positive integers: {value}")
+    if expected_pool_layers == 0:
+        return []
+    if len(strides) == 1:
+        return strides * expected_pool_layers
+    if len(strides) != expected_pool_layers:
+        raise SystemExit(
+            f"--pool-strides must have 1 or {expected_pool_layers} values for channels={expected_pool_layers + 1}: {value}"
+        )
+    return strides
+
+
 def compute_classifier_input_features(
     input_shape: tuple[int, int],
     channels: list[int],
     pool_output_size: int,
+    pool_kernel_size: int = 2,
+    pool_strides: list[int] | None = None,
 ) -> int:
     if pool_output_size > 0:
         return channels[-1] * pool_output_size * pool_output_size
 
+    expected_pool_layers = max(len(channels) - 1, 0)
+    if pool_strides is None:
+        pool_strides = [pool_kernel_size] * expected_pool_layers
+    if len(pool_strides) != expected_pool_layers:
+        raise ValueError("pool_strides must have one entry per intermediate pooling layer.")
+
     height, width = input_shape
-    for _ in channels[:-1]:
-        height //= 2
-        width //= 2
+    for stride in pool_strides:
+        height = ((height - pool_kernel_size) // stride) + 1
+        width = ((width - pool_kernel_size) // stride) + 1
     if height <= 0 or width <= 0:
         raise ValueError(f"Input shape is too small after pooling: {input_shape}")
     return channels[-1] * height * width
@@ -287,8 +390,14 @@ def main() -> None:
     set_seed(args.seed)
     device = choose_device(args.device)
     channels = parse_channels(args.channels)
+    conv_kernel_size = parse_kernel_size(args.conv_kernel_size)
     if args.pool_output_size < 0:
         raise SystemExit("--pool-output-size must be non-negative.")
+    if args.pool_kernel_size < 1:
+        raise SystemExit("--pool-kernel-size must be positive.")
+    if args.classifier_hidden_size < 0:
+        raise SystemExit("--classifier-hidden-size must be non-negative.")
+    pool_strides = parse_pool_strides(args.pool_strides, max(len(channels) - 1, 0))
     artifacts_dir = Path(args.artifacts_dir) / args.run_name
     artifacts_dir.mkdir(parents=True, exist_ok=True)
     started_at = datetime.now(timezone.utc)
@@ -312,7 +421,11 @@ def main() -> None:
     model = CompactLogMelCNN(
         channels=channels,
         input_shape=(features.shape[1], features.shape[2]),
+        conv_kernel_size=conv_kernel_size,
         pool_output_size=args.pool_output_size,
+        pool_kernel_size=args.pool_kernel_size,
+        pool_strides=pool_strides,
+        classifier_hidden_size=args.classifier_hidden_size,
         num_classes=len(np.unique(labels)),
         dropout=args.dropout,
     ).to(device)
@@ -431,7 +544,11 @@ def main() -> None:
         "weight_decay": args.weight_decay,
         "dropout": args.dropout,
         "channels": channels,
+        "conv_kernel_size": list(conv_kernel_size),
         "pool_output_size": args.pool_output_size,
+        "pool_kernel_size": args.pool_kernel_size,
+        "pool_strides": pool_strides,
+        "classifier_hidden_size": args.classifier_hidden_size,
         "classifier_input_features": model.classifier_input_features,
         "device": str(device),
         "scheduler": args.scheduler,

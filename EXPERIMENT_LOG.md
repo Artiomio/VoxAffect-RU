@@ -2838,3 +2838,1687 @@ This tests only one seed, one balanced subset size, and one architecture. It use
 ### Next step
 
 Prioritize model/data tweaks over simply extending fixed duration to 7s: larger balanced subset, crop augmentation, alternative pooling/time aggregation, or a lower-LR schedule around the 100-200 epoch convergence region.
+
+
+## 2026-05-31 - Larger balanced subset CNN training
+
+### Goal / hypothesis
+
+Test whether scaling the balanced binary train subset from 1000 examples per class to 9000 examples per class improves the current best 6s/80-mel CNN setup more than duration or epoch-budget tweaks.
+
+### Input data
+
+```text
+train source: data/dusha_emotion_audio/data/train.csv
+test source: data/dusha_emotion_audio/data/test.csv
+train subset: data/processed/subset_binary_train_9000.csv
+test subset: data/processed/subset_binary_test_2400.csv
+train rows: 18000, balanced 9000 negative / 9000 positive
+test rows: 4800, balanced 2400 negative / 2400 positive
+train cache: data/features/subset_binary_train_9000_logmel_6s_80mels.npz
+test cache: data/features/subset_binary_test_2400_logmel_6s_80mels.npz
+```
+
+### Commands / scripts used
+
+```bash
+.venv/bin/python -m src.make_subset --data-dir data/dusha_emotion_audio/data --split train --task binary --samples-per-class 9000 --seed 42 --output data/processed/subset_binary_train_9000.csv
+.venv/bin/python -m src.make_subset --data-dir data/dusha_emotion_audio/data --split test --task binary --samples-per-class 2400 --seed 42 --output data/processed/subset_binary_test_2400.csv
+.venv/bin/python -m src.build_logmel_cache --subset-path data/processed/subset_binary_train_9000.csv --output data/features/subset_binary_train_9000_logmel_6s_80mels.npz --sample-rate 16000 --duration 6.0 --n-mels 80
+.venv/bin/python -m src.build_logmel_cache --subset-path data/processed/subset_binary_test_2400.csv --output data/features/subset_binary_test_2400_logmel_6s_80mels.npz --sample-rate 16000 --duration 6.0 --n-mels 80
+.venv/bin/python -m src.train_cnn_logmel --features-path data/features/subset_binary_train_9000_logmel_6s_80mels.npz --eval-features-path data/features/subset_binary_test_2400_logmel_6s_80mels.npz --run-name cnn_logmel_binary_9000_6s80mels_wide_pool4_1200ep_gpu --epochs 1200 --batch-size 128 --channels 32,64,128 --pool-output-size 4 --scheduler reduce_on_plateau --lr-factor 0.5 --lr-patience 10 --patience 120 --device cuda
+```
+
+### Results
+
+```text
+run_name: cnn_logmel_binary_9000_6s80mels_wide_pool4_1200ep_gpu
+artifact dir: artifacts/cnn_logmel_binary_9000_6s80mels_wide_pool4_1200ep_gpu/
+train cache size: 693M
+test cache size: 184M
+artifact size: 2.0M
+epochs completed: 257
+stopped early: true
+best epoch: 137
+best validation accuracy: 0.8425
+best validation macro F1: 0.8425
+external eval accuracy: 0.8338
+external eval precision macro: 0.8340
+external eval recall macro: 0.8338
+external eval macro F1: 0.8337
+duration: 1831.8 seconds
+mean epoch time: 7.10 seconds
+```
+
+### Comparison table
+
+```text
+run | model | data/subset | key parameters | accuracy | macro F1 | interpretation
+----|-------|-------------|----------------|----------|----------|----------------
+cnn_logmel_binary_1000_6s80mels_wide_pool4_1200ep_gpu | CompactLogMelCNN | 1000/class train, 1000/class eval | GPU; channels 32,64,128; pool 4; early stop at 281 | 0.7575 | 0.7575 | best small-subset CNN
+cnn_logmel_binary_1000_7s80mels_wide_pool4_1200ep_gpu | CompactLogMelCNN | 1000/class train, 1000/class eval | same model; 7s input | 0.7440 | 0.7422 | longer fixed duration did not help
+cnn_logmel_binary_9000_6s80mels_wide_pool4_1200ep_gpu | CompactLogMelCNN | 9000/class train, 2400/class eval | same model; 6s/80mels; early stop at 257 | 0.8338 | 0.8337 | large data increase gives the largest improvement so far
+```
+
+### Interpretation
+
+Increasing the balanced training subset is the strongest lever so far. External macro F1 improved from 0.7575 to 0.8337 while keeping the same architecture and 6s/80-mel representation. The model converged around epoch 137 and then plateaued.
+
+### Limitations
+
+The negative class still merges `angry` and `sad`, so per-source-label behavior should be inspected separately. Only one random seed was used for subset sampling and training. `neutral` remains excluded from the binary task.
+
+### Next step
+
+Try a small architecture tweak on the same 9000/class cache, starting with a hidden classifier head after the pooled CNN features.
+
+
+## 2026-05-31 - Hidden classifier head CNN tweak
+
+### Goal / hypothesis
+
+Test whether adding a small dense hidden layer after pooled CNN log-mel features improves the 9000/class 6s/80-mel CNN over the direct linear classifier head.
+
+### Input data
+
+```text
+train cache: data/features/subset_binary_train_9000_logmel_6s_80mels.npz
+test cache: data/features/subset_binary_test_2400_logmel_6s_80mels.npz
+train rows: 18000, balanced 9000 negative / 9000 positive
+test rows: 4800, balanced 2400 negative / 2400 positive
+cache shape train: (18000, 80, 188)
+cache shape test: (4800, 80, 188)
+```
+
+### Commands / scripts used
+
+```bash
+.venv/bin/python -m src.train_cnn_logmel --features-path data/features/subset_binary_train_9000_logmel_6s_80mels.npz --eval-features-path data/features/subset_binary_test_2400_logmel_6s_80mels.npz --run-name cnn_logmel_binary_9000_6s80mels_wide_pool4_hidden256_1200ep_gpu --epochs 1200 --batch-size 128 --channels 32,64,128 --pool-output-size 4 --classifier-hidden-size 256 --scheduler reduce_on_plateau --lr-factor 0.5 --lr-patience 10 --patience 120 --device cuda
+```
+
+### Important parameters
+
+```text
+model: CompactLogMelCNN
+channels: [32, 64, 128]
+pool_output_size: 4
+classifier_input_features: 2048
+classifier_hidden_size: 256
+batch_size: 128
+learning_rate: 0.001
+weight_decay: 0.0001
+dropout: 0.25
+scheduler: reduce_on_plateau
+lr_factor: 0.5
+lr_patience: 10
+patience: 120
+device: cuda
+```
+
+### Metrics and artifacts
+
+```text
+run_name: cnn_logmel_binary_9000_6s80mels_wide_pool4_hidden256_1200ep_gpu
+artifact dir: artifacts/cnn_logmel_binary_9000_6s80mels_wide_pool4_hidden256_1200ep_gpu/
+epochs requested: 1200
+epochs completed: 219
+stopped early: true
+best epoch: 99
+best validation accuracy: 0.8458
+best validation macro F1: 0.8458
+best validation threshold: 0.54
+best threshold validation macro F1: 0.8478
+external eval accuracy: 0.8427
+external eval precision macro: 0.8429
+external eval recall macro: 0.8427
+external eval macro F1: 0.8427
+duration: 1569.5 seconds
+mean epoch time: 7.13 seconds
+metrics: artifacts/cnn_logmel_binary_9000_6s80mels_wide_pool4_hidden256_1200ep_gpu/metrics.json
+model: artifacts/cnn_logmel_binary_9000_6s80mels_wide_pool4_hidden256_1200ep_gpu/model.pt
+curves: artifacts/cnn_logmel_binary_9000_6s80mels_wide_pool4_hidden256_1200ep_gpu/training_curves.png
+confusion_matrix: artifacts/cnn_logmel_binary_9000_6s80mels_wide_pool4_hidden256_1200ep_gpu/confusion_matrix.png
+predictions: artifacts/cnn_logmel_binary_9000_6s80mels_wide_pool4_hidden256_1200ep_gpu/predictions.csv
+```
+
+### Comparison table
+
+```text
+run | model | data/subset | key parameters | accuracy | macro F1 | interpretation
+----|-------|-------------|----------------|----------|----------|----------------
+cnn_logmel_binary_1000_6s80mels_wide_pool4_1200ep_gpu | CompactLogMelCNN | 1000/class train, 1000/class eval | 6s/80mels; channels 32,64,128; pool 4; direct head | 0.7575 | 0.7575 | best small-subset CNN
+cnn_logmel_binary_9000_6s80mels_wide_pool4_1200ep_gpu | CompactLogMelCNN | 9000/class train, 2400/class eval | 6s/80mels; channels 32,64,128; pool 4; direct head | 0.8338 | 0.8337 | larger data gives major gain
+cnn_logmel_binary_9000_6s80mels_wide_pool4_hidden256_1200ep_gpu | CompactLogMelCNN | 9000/class train, 2400/class eval | same CNN; hidden classifier layer 2048->256->2 | 0.8427 | 0.8427 | hidden head improves external macro F1 by about 0.009
+```
+
+### Interpretation
+
+Adding a 256-unit hidden classifier head improved the current best external macro F1 from 0.8337 to 0.8427 on the same train/eval caches. The validation peak arrived earlier than the direct-head run, at epoch 99 instead of epoch 137, but the model then plateaued with a very small learning rate.
+
+### Limitations
+
+Only one hidden size, one seed, and one optimizer schedule were tested. The result may depend on the fixed train/validation split and the threshold; external metrics above use the selected threshold from validation. Per-source-label behavior inside the merged negative class is still not measured.
+
+### Next step
+
+Use available GPU memory more effectively by trying a larger mini-batch on the same architecture and data, starting with batch size 256 while keeping the other parameters fixed.
+
+
+## 2026-05-31 - Larger hidden head CNN run
+
+### Goal / hypothesis
+
+Test whether increasing the hidden classifier head from 256 to 512 units improves the 9000/class 6s/80-mel CNN without changing the convolutional trunk or data.
+
+### Input data
+
+```text
+train cache: data/features/subset_binary_train_9000_logmel_6s_80mels.npz
+test cache: data/features/subset_binary_test_2400_logmel_6s_80mels.npz
+train rows: 18000, balanced 9000 negative / 9000 positive
+test rows: 4800, balanced 2400 negative / 2400 positive
+cache shape train: (18000, 80, 188)
+cache shape test: (4800, 80, 188)
+```
+
+### Commands / scripts used
+
+```bash
+.venv/bin/python -m src.train_cnn_logmel --features-path data/features/subset_binary_train_9000_logmel_6s_80mels.npz --eval-features-path data/features/subset_binary_test_2400_logmel_6s_80mels.npz --run-name cnn_logmel_binary_9000_6s80mels_wide_pool4_hidden512_1200ep_gpu --epochs 1200 --batch-size 128 --channels 32,64,128 --pool-output-size 4 --classifier-hidden-size 512 --scheduler reduce_on_plateau --lr-factor 0.5 --lr-patience 10 --patience 120 --device cuda
+```
+
+### Important parameters
+
+```text
+model: CompactLogMelCNN
+channels: [32, 64, 128]
+pool_output_size: 4
+classifier_input_features: 2048
+classifier_hidden_size: 512
+batch_size: 128
+learning_rate: 0.001
+weight_decay: 0.0001
+dropout: 0.25
+scheduler: reduce_on_plateau
+lr_factor: 0.5
+lr_patience: 10
+patience: 120
+device: cuda
+```
+
+### Metrics and artifacts
+
+```text
+run_name: cnn_logmel_binary_9000_6s80mels_wide_pool4_hidden512_1200ep_gpu
+artifact dir: artifacts/cnn_logmel_binary_9000_6s80mels_wide_pool4_hidden512_1200ep_gpu/
+epochs requested: 1200
+epochs completed: 230
+stopped early: true
+best epoch: 110
+best validation accuracy: 0.8442
+best validation macro F1: 0.8442
+best validation threshold: 0.50
+best threshold validation macro F1: 0.8442
+external eval accuracy: 0.8471
+external eval precision macro: 0.8474
+external eval recall macro: 0.8471
+external eval macro F1: 0.8470
+duration: 1652.1 seconds
+mean epoch time: 7.1 seconds
+metrics: artifacts/cnn_logmel_binary_9000_6s80mels_wide_pool4_hidden512_1200ep_gpu/metrics.json
+model: artifacts/cnn_logmel_binary_9000_6s80mels_wide_pool4_hidden512_1200ep_gpu/model.pt
+curves: artifacts/cnn_logmel_binary_9000_6s80mels_wide_pool4_hidden512_1200ep_gpu/training_curves.png
+confusion_matrix: artifacts/cnn_logmel_binary_9000_6s80mels_wide_pool4_hidden512_1200ep_gpu/confusion_matrix.png
+predictions: artifacts/cnn_logmel_binary_9000_6s80mels_wide_pool4_hidden512_1200ep_gpu/predictions.csv
+```
+
+### Comparison table
+
+```text
+run | model | data/subset | key parameters | accuracy | macro F1 | interpretation
+----|-------|-------------|----------------|----------|----------|----------------
+cnn_logmel_binary_1000_6s80mels_wide_pool4_1200ep_gpu | CompactLogMelCNN | 1000/class train, 1000/class eval | 6s/80mels; channels 32,64,128; pool 4; direct head | 0.7575 | 0.7575 | best small-subset CNN
+cnn_logmel_binary_9000_6s80mels_wide_pool4_1200ep_gpu | CompactLogMelCNN | 9000/class train, 2400/class eval | 6s/80mels; channels 32,64,128; pool 4; direct head | 0.8338 | 0.8337 | larger data gives major gain
+cnn_logmel_binary_9000_6s80mels_wide_pool4_hidden256_1200ep_gpu | CompactLogMelCNN | 9000/class train, 2400/class eval | same CNN; hidden classifier layer 2048->256->2 | 0.8427 | 0.8427 | hidden head improved external macro F1
+cnn_logmel_binary_9000_6s80mels_wide_pool4_hidden512_1200ep_gpu | CompactLogMelCNN | 9000/class train, 2400/class eval | same CNN; hidden classifier layer 2048->512->2 | 0.8471 | 0.8470 | larger hidden head is current best external result
+```
+
+### Interpretation
+
+Increasing the classifier head from 256 to 512 units improved the external metrics again, from 0.8427 to 0.8470 macro F1. Validation peak was slightly lower than the external improvement suggests, so the run appears to have benefited from the selected threshold and the slightly different optimization trajectory rather than just a higher validation ceiling.
+
+### Limitations
+
+This remains a single-seed comparison on one fixed split. The validation peak did not increase much relative to the hidden256 run, so the apparent external gain should be rechecked with a second seed or a second split before treating it as stable. Per-source-label behavior inside the merged negative class is still unmeasured.
+
+### Next step
+
+If we keep tuning the head, the next sensible test is a controlled batch-size increase on the current best architecture, but only after confirming whether the best hidden512 checkpoint is stable across another seed or split.
+
+
+## 2026-05-31 - Deeper convolutional trunk run
+
+### Goal / hypothesis
+
+Test whether adding a fourth convolutional block helps the CNN learn more abstract patterns and improves the 9000/class 6s/80-mel setup without changing the classifier head.
+
+### Input data
+
+```text
+train cache: data/features/subset_binary_train_9000_logmel_6s_80mels.npz
+test cache: data/features/subset_binary_test_2400_logmel_6s_80mels.npz
+train rows: 18000, balanced 9000 negative / 9000 positive
+test rows: 4800, balanced 2400 negative / 2400 positive
+cache shape train: (18000, 80, 188)
+cache shape test: (4800, 80, 188)
+```
+
+### Commands / scripts used
+
+```bash
+.venv/bin/python -m src.train_cnn_logmel --features-path data/features/subset_binary_train_9000_logmel_6s_80mels.npz --eval-features-path data/features/subset_binary_test_2400_logmel_6s_80mels.npz --run-name cnn_logmel_binary_9000_6s80mels_4conv_pool4_hidden512_1200ep_gpu --epochs 1200 --batch-size 128 --channels 32,64,128,192 --pool-output-size 4 --classifier-hidden-size 512 --scheduler reduce_on_plateau --lr-factor 0.5 --lr-patience 10 --patience 120 --device cuda
+```
+
+### Important parameters
+
+```text
+model: CompactLogMelCNN
+channels: [32, 64, 128, 192]
+pool_output_size: 4
+classifier_input_features: 3072
+classifier_hidden_size: 512
+batch_size: 128
+learning_rate: 0.001
+weight_decay: 0.0001
+dropout: 0.25
+scheduler: reduce_on_plateau
+lr_factor: 0.5
+lr_patience: 10
+patience: 120
+device: cuda
+```
+
+### Metrics and artifacts
+
+```text
+run_name: cnn_logmel_binary_9000_6s80mels_4conv_pool4_hidden512_1200ep_gpu
+artifact dir: artifacts/cnn_logmel_binary_9000_6s80mels_4conv_pool4_hidden512_1200ep_gpu/
+epochs requested: 1200
+epochs completed: 167
+stopped early: true
+best epoch: 47
+best validation accuracy: 0.8442
+best validation macro F1: 0.8442
+best validation threshold: 0.52
+best threshold validation macro F1: 0.8458
+external eval accuracy: 0.8369
+external eval precision macro: 0.8371
+external eval recall macro: 0.8369
+external eval macro F1: 0.8369
+duration: 1344.6 seconds
+mean epoch time: 8.0 seconds
+metrics: artifacts/cnn_logmel_binary_9000_6s80mels_4conv_pool4_hidden512_1200ep_gpu/metrics.json
+model: artifacts/cnn_logmel_binary_9000_6s80mels_4conv_pool4_hidden512_1200ep_gpu/model.pt
+curves: artifacts/cnn_logmel_binary_9000_6s80mels_4conv_pool4_hidden512_1200ep_gpu/training_curves.png
+confusion_matrix: artifacts/cnn_logmel_binary_9000_6s80mels_4conv_pool4_hidden512_1200ep_gpu/confusion_matrix.png
+predictions: artifacts/cnn_logmel_binary_9000_6s80mels_4conv_pool4_hidden512_1200ep_gpu/predictions.csv
+```
+
+### Comparison table
+
+```text
+run | model | data/subset | key parameters | accuracy | macro F1 | interpretation
+----|-------|-------------|----------------|----------|----------|----------------
+cnn_logmel_binary_1000_6s80mels_wide_pool4_1200ep_gpu | CompactLogMelCNN | 1000/class train, 1000/class eval | 6s/80mels; channels 32,64,128; pool 4; direct head | 0.7575 | 0.7575 | best small-subset CNN
+cnn_logmel_binary_9000_6s80mels_wide_pool4_1200ep_gpu | CompactLogMelCNN | 9000/class train, 2400/class eval | 6s/80mels; channels 32,64,128; pool 4; direct head | 0.8338 | 0.8337 | larger data gives major gain
+cnn_logmel_binary_9000_6s80mels_wide_pool4_hidden256_1200ep_gpu | CompactLogMelCNN | 9000/class train, 2400/class eval | same CNN; hidden classifier layer 2048->256->2 | 0.8427 | 0.8427 | hidden head improves external macro F1
+cnn_logmel_binary_9000_6s80mels_wide_pool4_hidden512_1200ep_gpu | CompactLogMelCNN | 9000/class train, 2400/class eval | same CNN; hidden classifier layer 2048->512->2 | 0.8471 | 0.8470 | larger hidden head is current best external result
+cnn_logmel_binary_9000_6s80mels_4conv_pool4_hidden512_1200ep_gpu | CompactLogMelCNN | 9000/class train, 2400/class eval | 4 conv blocks; channels 32,64,128,192; head 3072->512->2 | 0.8369 | 0.8369 | deeper conv stack speeds up early learning but does not beat hidden512
+```
+
+### Interpretation
+
+Adding a fourth convolutional block made the model learn useful features faster in the early epochs, and it reached the best validation point much earlier than the 3-block runs. However, the final external test score did not improve over the current best hidden512 configuration. The extra conv depth increased epoch time from about 7.1s to 8.0s, so the quality/speed tradeoff is worse unless a different regularization or head setting is paired with the deeper trunk.
+
+### Limitations
+
+This is still one fixed seed and one fixed split. The deeper trunk may need a different classifier head size, a different pooling strategy, or a different learning-rate schedule to turn the stronger early learning into a better external test score. Per-source-label behavior inside the merged negative class remains unmeasured.
+
+### Next step
+
+Keep the current best `hidden512` run as the external metric baseline. If we want to keep exploring depth, the next sensible follow-up is a more constrained sweep around the 4-block trunk with a smaller head or a different pooling setting rather than widening the trunk further.
+
+
+## 2026-05-31 - Mixed-stride pooling pilot
+
+### Goal / hypothesis
+
+Test whether making the early max-pooling less aggressive helps the final classifier see more detail without paying the full cost of disabling downsampling everywhere.
+
+### Input data
+
+```text
+train cache: data/features/subset_binary_train_9000_logmel_6s_80mels.npz
+test cache: data/features/subset_binary_test_2400_logmel_6s_80mels.npz
+train rows: 18000, balanced 9000 negative / 9000 positive
+test rows: 4800, balanced 2400 negative / 2400 positive
+cache shape train: (18000, 80, 188)
+cache shape test: (4800, 80, 188)
+```
+
+### Commands / scripts used
+
+```bash
+.venv/bin/python -m src.train_cnn_logmel --features-path data/features/subset_binary_train_9000_logmel_6s_80mels.npz --eval-features-path data/features/subset_binary_test_2400_logmel_6s_80mels.npz --run-name cnn_logmel_binary_9000_6s80mels_poolstrides12_pool4_hidden512_1200ep_gpu --epochs 1200 --batch-size 128 --channels 32,64,128 --pool-output-size 4 --pool-kernel-size 2 --pool-strides 1,2 --classifier-hidden-size 512 --scheduler reduce_on_plateau --lr-factor 0.5 --lr-patience 10 --patience 120 --device cuda
+```
+
+### Important parameters
+
+```text
+model: CompactLogMelCNN
+channels: [32, 64, 128]
+pool_kernel_size: 2
+pool_strides: [1, 2]
+pool_output_size: 4
+classifier_hidden_size: 512
+batch_size: 128
+device: cuda
+```
+
+### Observations
+
+```text
+epochs observed: 14
+epoch 1 val_f1: 0.6468
+epoch 5 val_f1: 0.7203
+epoch 10 val_f1: 0.7545
+epoch 14 val_f1: 0.7846
+epoch time: ~18.6s
+```
+
+### Interpretation
+
+The mixed-stride variant was much cheaper than disabling pooling everywhere, but it still ran roughly 2.5x slower per epoch than the current best 3-block hidden512 baseline. Early validation performance did not beat the baseline trajectory, so this setup did not justify a full training run.
+
+### Limitations
+
+The run was intentionally interrupted after the pilot phase, so there is no final validation or external test metric. The observation is limited to early learning dynamics and compute cost.
+
+### Next step
+
+Treat the current best `hidden512` configuration as the strong baseline. If we revisit pooling again, the next sensible move is a narrower architectural sweep rather than another broad max-pooling relaxation.
+
+
+## 2026-05-31 - Temporal 3x5 convolution kernel run
+
+### Goal / hypothesis
+
+Test whether using a wider temporal convolution kernel improves emotion classification by capturing broader time-context patterns in the 6s/80-mel spectrogram without relaxing max-pooling.
+
+### Input data
+
+```text
+train cache: data/features/subset_binary_train_9000_logmel_6s_80mels.npz
+test cache: data/features/subset_binary_test_2400_logmel_6s_80mels.npz
+train rows: 18000, balanced 9000 negative / 9000 positive
+test rows: 4800, balanced 2400 negative / 2400 positive
+cache shape train: (18000, 80, 188)
+cache shape test: (4800, 80, 188)
+```
+
+### Commands / scripts used
+
+```bash
+.venv/bin/python -m src.train_cnn_logmel --features-path data/features/subset_binary_train_9000_logmel_6s_80mels.npz --eval-features-path data/features/subset_binary_test_2400_logmel_6s_80mels.npz --run-name cnn_logmel_binary_9000_6s80mels_conv3x5_pool4_hidden512_1200ep_gpu --epochs 1200 --batch-size 128 --channels 32,64,128 --conv-kernel-size 3,5 --pool-output-size 4 --pool-kernel-size 2 --pool-strides 2 --classifier-hidden-size 512 --scheduler reduce_on_plateau --lr-factor 0.5 --lr-patience 10 --patience 120 --device cuda
+```
+
+### Important parameters
+
+```text
+model: CompactLogMelCNN
+channels: [32, 64, 128]
+conv_kernel_size: [3, 5]
+pool_kernel_size: 2
+pool_strides: [2, 2]
+pool_output_size: 4
+classifier_input_features: 2048
+classifier_hidden_size: 512
+batch_size: 128
+device: cuda
+```
+
+### Metrics and artifacts
+
+```text
+run_name: cnn_logmel_binary_9000_6s80mels_conv3x5_pool4_hidden512_1200ep_gpu
+artifact dir: artifacts/cnn_logmel_binary_9000_6s80mels_conv3x5_pool4_hidden512_1200ep_gpu/
+epochs requested: 1200
+epochs completed: 223
+stopped early: true
+best epoch: 103
+best validation accuracy: 0.8433
+best validation macro F1: 0.8433
+best validation threshold: 0.56
+best threshold validation macro F1: 0.8455
+external eval accuracy: 0.8429
+external eval precision macro: 0.8430
+external eval recall macro: 0.8429
+external eval macro F1: 0.8429
+duration: 1842.9 seconds
+mean epoch time: 8.2 seconds
+metrics: artifacts/cnn_logmel_binary_9000_6s80mels_conv3x5_pool4_hidden512_1200ep_gpu/metrics.json
+model: artifacts/cnn_logmel_binary_9000_6s80mels_conv3x5_pool4_hidden512_1200ep_gpu/model.pt
+curves: artifacts/cnn_logmel_binary_9000_6s80mels_conv3x5_pool4_hidden512_1200ep_gpu/training_curves.png
+confusion_matrix: artifacts/cnn_logmel_binary_9000_6s80mels_conv3x5_pool4_hidden512_1200ep_gpu/confusion_matrix.png
+predictions: artifacts/cnn_logmel_binary_9000_6s80mels_conv3x5_pool4_hidden512_1200ep_gpu/predictions.csv
+```
+
+### Comparison table
+
+```text
+run | model | data/subset | key parameters | accuracy | macro F1 | interpretation
+----|-------|-------------|----------------|----------|----------|----------------
+cnn_logmel_binary_9000_6s80mels_wide_pool4_hidden512_1200ep_gpu | CompactLogMelCNN | 9000/class train, 2400/class eval | 3x3 conv; pool strides 2,2; head 2048->512->2 | 0.8471 | 0.8470 | current best external result
+cnn_logmel_binary_9000_6s80mels_4conv_pool4_hidden512_1200ep_gpu | CompactLogMelCNN | 9000/class train, 2400/class eval | 4 conv blocks; channels 32,64,128,192; head 3072->512->2 | 0.8369 | 0.8369 | deeper conv stack did not improve external result
+cnn_logmel_binary_9000_6s80mels_poolstrides12_pool4_hidden512_1200ep_gpu | CompactLogMelCNN | 9000/class train, 2400/class eval | 3x3 conv; pool strides 1,2; interrupted pilot | n/a | n/a | slower early learning; not worth full run
+cnn_logmel_binary_9000_6s80mels_conv3x5_pool4_hidden512_1200ep_gpu | CompactLogMelCNN | 9000/class train, 2400/class eval | 3x5 conv; pool strides 2,2; head 2048->512->2 | 0.8429 | 0.8429 | temporal kernels did not beat 3x3 baseline
+```
+
+### Interpretation
+
+The 3x5 temporal kernel preserved the efficient pooling schedule and trained at a moderate cost increase over the 3x3 baseline, but it did not improve the external metric ceiling. The result suggests that simply widening the convolutional window along time is less useful than the current 3x3 trunk plus 512-unit classifier head.
+
+### Limitations
+
+Only one asymmetric kernel size was tested. A frequency-wider 5x3 kernel, dilated 3x3 kernels, or mixed kernels by layer might behave differently. The run uses the same fixed split and seed as prior CNN experiments.
+
+### Next step
+
+Keep the 3x3 hidden512 model as the best baseline. If continuing architecture search, prefer a small controlled test of dilated 3x3 kernels or stability checks across seeds before adding more capacity.
+
+
+## 2026-05-31 - Flattened log-mel MLP baselines
+
+### Goal / hypothesis
+
+Test whether fully connected models on flattened 6s/80-mel spectrograms can provide a useful non-convolutional baseline, and whether a 1000-unit hidden layer improves over direct softmax classification.
+
+### Input data
+
+```text
+train cache: data/features/subset_binary_train_9000_logmel_6s_80mels.npz
+test cache: data/features/subset_binary_test_2400_logmel_6s_80mels.npz
+train rows: 18000, balanced 9000 negative / 9000 positive
+test rows: 4800, balanced 2400 negative / 2400 positive
+input spectrogram shape: (80, 188)
+flattened input features: 15040
+```
+
+### Commands / scripts used
+
+```bash
+.venv/bin/python -m src.train_mlp_logmel --features-path data/features/subset_binary_train_9000_logmel_6s_80mels.npz --eval-features-path data/features/subset_binary_test_2400_logmel_6s_80mels.npz --run-name mlp_logmel_binary_9000_6s80mels_linear_1200ep_gpu --epochs 1200 --batch-size 128 --hidden-size 0 --scheduler reduce_on_plateau --lr-factor 0.5 --lr-patience 10 --patience 120 --device cuda
+.venv/bin/python -m src.train_mlp_logmel --features-path data/features/subset_binary_train_9000_logmel_6s_80mels.npz --eval-features-path data/features/subset_binary_test_2400_logmel_6s_80mels.npz --run-name mlp_logmel_binary_9000_6s80mels_hidden1000_1200ep_gpu --epochs 1200 --batch-size 128 --hidden-size 1000 --scheduler reduce_on_plateau --lr-factor 0.5 --lr-patience 10 --patience 120 --device cuda
+```
+
+### Important parameters
+
+```text
+linear MLP: Flatten -> Linear(15040, 2)
+hidden MLP: Flatten -> Dropout(0.25) -> Linear(15040, 1000) -> ReLU -> Dropout(0.25) -> Linear(1000, 2)
+loss: CrossEntropyLoss over 2 logits
+probabilities: softmax(logits) for threshold tuning and predictions
+batch_size: 128
+scheduler: reduce_on_plateau
+patience: 120
+device: cuda
+```
+
+### Metrics and artifacts
+
+```text
+run_name: mlp_logmel_binary_9000_6s80mels_linear_1200ep_gpu
+artifact dir: artifacts/mlp_logmel_binary_9000_6s80mels_linear_1200ep_gpu/
+epochs completed: 128
+stopped early: true
+best epoch: 8
+best validation accuracy: 0.6519
+best validation macro F1: 0.6489
+best validation threshold: 0.56
+best threshold validation macro F1: 0.6565
+external eval accuracy: 0.6406
+external eval precision macro: 0.6417
+external eval recall macro: 0.6406
+external eval macro F1: 0.6399
+duration: 117.8 seconds
+mean epoch time: 0.87 seconds
+
+run_name: mlp_logmel_binary_9000_6s80mels_hidden1000_1200ep_gpu
+artifact dir: artifacts/mlp_logmel_binary_9000_6s80mels_hidden1000_1200ep_gpu/
+epochs completed: 136
+stopped early: true
+best epoch: 16
+best validation accuracy: 0.6989
+best validation macro F1: 0.6984
+best validation threshold: 0.46
+best threshold validation macro F1: 0.7044
+external eval accuracy: 0.6883
+external eval precision macro: 0.6884
+external eval recall macro: 0.6883
+external eval macro F1: 0.6883
+duration: 195.1 seconds
+mean epoch time: 1.38 seconds
+```
+
+### Comparison table
+
+```text
+run | model | data/subset | key parameters | accuracy | macro F1 | interpretation
+----|-------|-------------|----------------|----------|----------|----------------
+mlp_logmel_binary_9000_6s80mels_linear_1200ep_gpu | LogMelMLP | 9000/class train, 2400/class eval | Flatten -> 2 logits | 0.6406 | 0.6399 | weak non-convolutional baseline
+mlp_logmel_binary_9000_6s80mels_hidden1000_1200ep_gpu | LogMelMLP | 9000/class train, 2400/class eval | Flatten -> 1000 -> 2 logits | 0.6883 | 0.6883 | hidden layer helps but strongly underperforms CNN
+cnn_logmel_binary_9000_6s80mels_wide_pool4_hidden512_1200ep_gpu | CompactLogMelCNN | 9000/class train, 2400/class eval | 3x3 conv; pool 4; hidden head 2048->512->2 | 0.8471 | 0.8470 | current best external result
+```
+
+### Interpretation
+
+Flattened fully connected models lose the spectrogram locality that CNNs exploit. The direct softmax layer is very weak, and adding 1000 hidden units improves the score but overfits quickly: training accuracy rises above 0.9 while validation stays around 0.69. This supports keeping convolutional inductive bias as the main modeling direction.
+
+### Limitations
+
+Only one hidden size and one dropout value were tested. Stronger MLP regularization or lower learning rate might improve the hidden MLP, but the gap to CNN is large enough that this is unlikely to be the best next direction.
+
+### Next step
+
+Prioritize data augmentation for the CNN baseline rather than further MLP tuning. Candidate augmentations include time masking, frequency masking, mild time shift/crop, and additive noise on waveform or log-mel inputs.
+
+
+## 2026-05-31 - Reduced hidden layer for flattened log-mel MLP
+
+### Goal / hypothesis
+
+Check whether reducing the fully connected hidden layer from 1000 to 500 units improves generalization for the flattened spectrogram MLP by lowering parameter count and overfitting pressure.
+
+### Input data
+
+```text
+train cache: data/features/subset_binary_train_9000_logmel_6s_80mels.npz
+test cache: data/features/subset_binary_test_2400_logmel_6s_80mels.npz
+train rows: 18000, balanced 9000 negative / 9000 positive
+test rows: 4800, balanced 2400 negative / 2400 positive
+input spectrogram shape: (80, 188)
+flattened input features: 15040
+```
+
+### Commands / scripts used
+
+```bash
+.venv/bin/python -m src.train_mlp_logmel --features-path data/features/subset_binary_train_9000_logmel_6s_80mels.npz --eval-features-path data/features/subset_binary_test_2400_logmel_6s_80mels.npz --run-name mlp_logmel_binary_9000_6s80mels_hidden500_1200ep_gpu --epochs 1200 --batch-size 128 --hidden-size 500 --scheduler reduce_on_plateau --lr-factor 0.5 --lr-patience 10 --patience 120 --device cuda
+```
+
+### Important parameters
+
+```text
+model: Flatten -> Dropout(0.25) -> Linear(15040, 500) -> ReLU -> Dropout(0.25) -> Linear(500, 2)
+loss: CrossEntropyLoss over 2 logits
+probabilities: softmax(logits) for threshold tuning and predictions
+batch_size: 128
+scheduler: reduce_on_plateau
+patience: 120
+device: cuda
+```
+
+### Metrics and artifacts
+
+```text
+run_name: mlp_logmel_binary_9000_6s80mels_hidden500_1200ep_gpu
+artifact dir: artifacts/mlp_logmel_binary_9000_6s80mels_hidden500_1200ep_gpu/
+epochs completed: 152
+stopped early: true
+best epoch: 32
+best validation accuracy: 0.7014
+best validation macro F1: 0.7012
+best validation threshold: 0.50
+best threshold validation macro F1: 0.7012
+external eval accuracy: 0.6831
+external eval precision macro: 0.6837
+external eval recall macro: 0.6831
+external eval macro F1: 0.6829
+duration: 182.2 seconds
+mean epoch time: 1.15 seconds
+```
+
+### Comparison table
+
+```text
+run | model | data/subset | key parameters | accuracy | macro F1 | interpretation
+----|-------|-------------|----------------|----------|----------|----------------
+mlp_logmel_binary_9000_6s80mels_linear_1200ep_gpu | LogMelMLP | 9000/class train, 2400/class eval | Flatten -> 2 logits | 0.6406 | 0.6399 | weak direct classifier baseline
+mlp_logmel_binary_9000_6s80mels_hidden500_1200ep_gpu | LogMelMLP | 9000/class train, 2400/class eval | Flatten -> 500 -> 2 logits; dropout 0.25 | 0.6831 | 0.6829 | smaller hidden layer is faster but does not improve external generalization
+mlp_logmel_binary_9000_6s80mels_hidden1000_1200ep_gpu | LogMelMLP | 9000/class train, 2400/class eval | Flatten -> 1000 -> 2 logits; dropout 0.25 | 0.6883 | 0.6883 | best MLP external result so far
+cnn_logmel_binary_9000_6s80mels_wide_pool4_hidden512_1200ep_gpu | CompactLogMelCNN | 9000/class train, 2400/class eval | 3x3 conv; pool 4; hidden head 2048->512->2 | 0.8471 | 0.8470 | current best external result
+```
+
+### Interpretation
+
+Reducing the MLP hidden layer from 1000 to 500 units slightly improved the best internal validation macro F1, but external macro F1 decreased from 0.6883 to 0.6829. The smaller MLP trains faster and has fewer parameters, but it still strongly underperforms the CNN. The result suggests that the main MLP limitation is not only hidden-layer size, but the loss of local time-frequency structure after flattening.
+
+### Limitations
+
+Only dropout 0.25 was tested for the 500-unit MLP. The run uses the same split and seed as prior MLP experiments. A stronger dropout setting may reduce overfitting, but the gap to CNN remains large.
+
+### Next step
+
+If continuing the MLP branch, run a controlled regularization test with `hidden_size=500` and higher dropout, for example `--dropout 0.5`. For the main project direction, prioritize CNN data augmentation because it is more likely to improve the current best model.
+
+
+## 2026-05-31 - Stronger dropout for 500-unit flattened log-mel MLP
+
+### Goal / hypothesis
+
+Check whether increasing dropout from 0.25 to 0.50 improves generalization for the 500-unit flattened spectrogram MLP.
+
+### Input data
+
+```text
+train cache: data/features/subset_binary_train_9000_logmel_6s_80mels.npz
+test cache: data/features/subset_binary_test_2400_logmel_6s_80mels.npz
+train rows: 18000, balanced 9000 negative / 9000 positive
+test rows: 4800, balanced 2400 negative / 2400 positive
+input spectrogram shape: (80, 188)
+flattened input features: 15040
+```
+
+### Commands / scripts used
+
+```bash
+.venv/bin/python -m src.train_mlp_logmel --features-path data/features/subset_binary_train_9000_logmel_6s_80mels.npz --eval-features-path data/features/subset_binary_test_2400_logmel_6s_80mels.npz --run-name mlp_logmel_binary_9000_6s80mels_hidden500_dropout050_1200ep_gpu --epochs 1200 --batch-size 128 --hidden-size 500 --dropout 0.5 --scheduler reduce_on_plateau --lr-factor 0.5 --lr-patience 10 --patience 120 --device cuda
+```
+
+### Important parameters
+
+```text
+model: Flatten -> Dropout(0.50) -> Linear(15040, 500) -> ReLU -> Dropout(0.50) -> Linear(500, 2)
+loss: CrossEntropyLoss over 2 logits
+probabilities: softmax(logits) for threshold tuning and predictions
+batch_size: 128
+scheduler: reduce_on_plateau
+patience: 120
+device: cuda
+```
+
+### Metrics and artifacts
+
+```text
+run_name: mlp_logmel_binary_9000_6s80mels_hidden500_dropout050_1200ep_gpu
+artifact dir: artifacts/mlp_logmel_binary_9000_6s80mels_hidden500_dropout050_1200ep_gpu/
+epochs completed: 167
+stopped early: true
+best epoch: 47
+best validation accuracy: 0.7069
+best validation macro F1: 0.7067
+best validation threshold: 0.50
+best threshold validation macro F1: 0.7067
+external eval accuracy: 0.6938
+external eval precision macro: 0.6947
+external eval recall macro: 0.6938
+external eval macro F1: 0.6934
+duration: 198.5 seconds
+mean epoch time: 1.15 seconds
+```
+
+### Comparison table
+
+```text
+run | model | data/subset | key parameters | accuracy | macro F1 | interpretation
+----|-------|-------------|----------------|----------|----------|----------------
+mlp_logmel_binary_9000_6s80mels_hidden500_1200ep_gpu | LogMelMLP | 9000/class train, 2400/class eval | Flatten -> 500 -> 2 logits; dropout 0.25 | 0.6831 | 0.6829 | lower dropout overfits more and generalizes worse
+mlp_logmel_binary_9000_6s80mels_hidden500_dropout050_1200ep_gpu | LogMelMLP | 9000/class train, 2400/class eval | Flatten -> 500 -> 2 logits; dropout 0.50 | 0.6938 | 0.6934 | stronger dropout improves best MLP result
+mlp_logmel_binary_9000_6s80mels_hidden1000_1200ep_gpu | LogMelMLP | 9000/class train, 2400/class eval | Flatten -> 1000 -> 2 logits; dropout 0.25 | 0.6883 | 0.6883 | larger hidden layer without stronger dropout is slightly worse externally
+cnn_logmel_binary_9000_6s80mels_wide_pool4_hidden512_1200ep_gpu | CompactLogMelCNN | 9000/class train, 2400/class eval | 3x3 conv; pool 4; hidden head 2048->512->2 | 0.8471 | 0.8470 | current best external result
+```
+
+### Interpretation
+
+Increasing dropout to 0.50 improved the 500-unit MLP external macro F1 from 0.6829 to 0.6934 and also beat the 1000-unit MLP with dropout 0.25. The train accuracy stayed much lower than in the earlier hidden MLP runs, which supports the hypothesis that regularization helps this flattened architecture. The absolute gap to CNN remains large.
+
+### Limitations
+
+Only batch size 128 was tested for this dropout setting. Smaller mini-batches may add useful gradient noise but will require more optimizer steps per epoch and may reduce GPU utilization.
+
+### Next step
+
+If continuing the MLP branch, test the same `hidden_size=500`, `dropout=0.50` setup with smaller batch size, for example `--batch-size 64`, to measure the generalization-speed tradeoff. The main modeling direction should still prioritize CNN augmentation.
+
+
+## 2026-05-31 - Tanh activation for 500-unit flattened log-mel MLP
+
+### Goal / hypothesis
+
+Test whether replacing ReLU with a smoother saturating activation (`tanh`) improves generalization for the regularized 500-unit flattened spectrogram MLP.
+
+### Input data
+
+```text
+train cache: data/features/subset_binary_train_9000_logmel_6s_80mels.npz
+test cache: data/features/subset_binary_test_2400_logmel_6s_80mels.npz
+train rows: 18000, balanced 9000 negative / 9000 positive
+test rows: 4800, balanced 2400 negative / 2400 positive
+input spectrogram shape: (80, 188)
+flattened input features: 15040
+```
+
+### Commands / scripts used
+
+```bash
+.venv/bin/python -m src.train_mlp_logmel --features-path data/features/subset_binary_train_9000_logmel_6s_80mels.npz --eval-features-path data/features/subset_binary_test_2400_logmel_6s_80mels.npz --run-name mlp_logmel_binary_9000_6s80mels_hidden500_dropout050_tanh_1200ep_gpu --epochs 1200 --batch-size 128 --hidden-size 500 --dropout 0.5 --activation tanh --scheduler reduce_on_plateau --lr-factor 0.5 --lr-patience 10 --patience 120 --device cuda
+```
+
+### Important parameters
+
+```text
+model: Flatten -> Dropout(0.50) -> Linear(15040, 500) -> Tanh -> Dropout(0.50) -> Linear(500, 2)
+loss: CrossEntropyLoss over 2 logits
+probabilities: softmax(logits) for threshold tuning and predictions
+batch_size: 128
+scheduler: reduce_on_plateau
+patience: 120
+device: cuda
+```
+
+### Metrics and artifacts
+
+```text
+run_name: mlp_logmel_binary_9000_6s80mels_hidden500_dropout050_tanh_1200ep_gpu
+artifact dir: artifacts/mlp_logmel_binary_9000_6s80mels_hidden500_dropout050_tanh_1200ep_gpu/
+epochs completed: 365
+stopped early: true
+best epoch: 245
+best validation accuracy: 0.6833
+best validation macro F1: 0.6833
+best validation threshold: 0.50
+best threshold validation macro F1: 0.6833
+external eval accuracy: 0.6617
+external eval precision macro: 0.6617
+external eval recall macro: 0.6617
+external eval macro F1: 0.6617
+duration: 427.1 seconds
+mean epoch time: 1.15 seconds
+```
+
+### Comparison table
+
+```text
+run | model | data/subset | key parameters | accuracy | macro F1 | interpretation
+----|-------|-------------|----------------|----------|----------|----------------
+mlp_logmel_binary_9000_6s80mels_hidden500_dropout050_1200ep_gpu | LogMelMLP | 9000/class train, 2400/class eval | ReLU; Flatten -> 500 -> 2; dropout 0.50 | 0.6938 | 0.6934 | best MLP result so far
+mlp_logmel_binary_9000_6s80mels_hidden500_dropout050_tanh_1200ep_gpu | LogMelMLP | 9000/class train, 2400/class eval | Tanh; Flatten -> 500 -> 2; dropout 0.50 | 0.6617 | 0.6617 | tanh underfits and generalizes worse than ReLU
+cnn_logmel_binary_9000_6s80mels_wide_pool4_hidden512_1200ep_gpu | CompactLogMelCNN | 9000/class train, 2400/class eval | 3x3 conv; pool 4; hidden head 2048->512->2 | 0.8471 | 0.8470 | current best external result
+```
+
+### Interpretation
+
+The smoother `tanh` activation did not help the flattened MLP. It trained more slowly, stopped at a lower validation peak, and reduced external macro F1 from 0.6934 to 0.6617 compared with ReLU under the same hidden size, dropout, batch size, scheduler, and seed. The result suggests that ReLU remains the better default activation for this MLP branch.
+
+### Limitations
+
+Only `tanh` was tested among saturating activations. Sigmoid may be tested separately, but based on tanh behavior and known saturation effects it is a lower-priority candidate.
+
+### Next step
+
+For activation search, keep ReLU as the current MLP default. For deliberate overfitting diagnostics, run an intentionally high-capacity low-regularization MLP, for example `hidden_size=1000` or `2000` with `dropout=0.0`, to observe the train/validation divergence directly.
+
+
+## 2026-05-31 - Deliberate overfitting diagnostic for flattened log-mel MLP
+
+### Goal / hypothesis
+
+Intentionally overfit a high-capacity flattened MLP to establish an upper-capacity diagnostic point and observe train/validation divergence. This run is not intended as a candidate best model.
+
+### Input data
+
+```text
+train cache: data/features/subset_binary_train_9000_logmel_6s_80mels.npz
+test cache: data/features/subset_binary_test_2400_logmel_6s_80mels.npz
+train rows: 18000, balanced 9000 negative / 9000 positive
+test rows: 4800, balanced 2400 negative / 2400 positive
+input spectrogram shape: (80, 188)
+flattened input features: 15040
+```
+
+### Commands / scripts used
+
+```bash
+.venv/bin/python -m src.train_mlp_logmel --features-path data/features/subset_binary_train_9000_logmel_6s_80mels.npz --eval-features-path data/features/subset_binary_test_2400_logmel_6s_80mels.npz --run-name mlp_logmel_binary_9000_6s80mels_hidden2000_dropout000_wd0_overfit_1200ep_gpu --epochs 1200 --batch-size 128 --hidden-size 2000 --dropout 0.0 --activation relu --weight-decay 0.0 --scheduler reduce_on_plateau --lr-factor 0.5 --lr-patience 10 --patience 120 --device cuda
+```
+
+### Important parameters
+
+```text
+model: Flatten -> Dropout(0.00) -> Linear(15040, 2000) -> ReLU -> Dropout(0.00) -> Linear(2000, 2)
+loss: CrossEntropyLoss over 2 logits
+weight_decay: 0.0
+batch_size: 128
+scheduler: reduce_on_plateau
+patience: 120
+device: cuda
+```
+
+### Metrics and artifacts
+
+```text
+run_name: mlp_logmel_binary_9000_6s80mels_hidden2000_dropout000_wd0_overfit_1200ep_gpu
+artifact dir: artifacts/mlp_logmel_binary_9000_6s80mels_hidden2000_dropout000_wd0_overfit_1200ep_gpu/
+epochs completed: 153
+stopped early: true
+best epoch: 33
+best validation accuracy: 0.6939
+best validation macro F1: 0.6938
+best validation threshold: 0.52
+best threshold validation macro F1: 0.6941
+external eval accuracy: 0.6794
+external eval precision macro: 0.6795
+external eval recall macro: 0.6794
+external eval macro F1: 0.6793
+duration: 284.0 seconds
+mean epoch time: 1.80 seconds
+```
+
+### Overfitting trace
+
+```text
+epoch | train accuracy | train loss | validation macro F1 | validation loss | interpretation
+------|----------------|------------|---------------------|-----------------|---------------
+33 | 0.9722 | 0.0893 | 0.6938 | 1.1302 | best validation checkpoint, already heavily fit to train
+77 | 1.0000 | 0.0107 | 0.6891 | 1.5645 | full memorization, validation no longer improves
+153 | 1.0000 | 0.0073 | 0.6884 | 1.6545 | late plateau with rising validation loss
+```
+
+### Comparison table
+
+```text
+run | model | data/subset | key parameters | accuracy | macro F1 | interpretation
+----|-------|-------------|----------------|----------|----------|----------------
+mlp_logmel_binary_9000_6s80mels_hidden500_dropout050_1200ep_gpu | LogMelMLP | 9000/class train, 2400/class eval | ReLU; 500 hidden; dropout 0.50; wd 1e-4 | 0.6938 | 0.6934 | best MLP external result so far
+mlp_logmel_binary_9000_6s80mels_hidden2000_dropout000_wd0_overfit_1200ep_gpu | LogMelMLP | 9000/class train, 2400/class eval | ReLU; 2000 hidden; dropout 0.00; wd 0.0 | 0.6794 | 0.6793 | deliberate overfit; memorizes train and generalizes worse
+cnn_logmel_binary_9000_6s80mels_wide_pool4_hidden512_1200ep_gpu | CompactLogMelCNN | 9000/class train, 2400/class eval | 3x3 conv; pool 4; hidden head 2048->512->2 | 0.8471 | 0.8470 | current best external result
+```
+
+### Interpretation
+
+The diagnostic succeeded: the high-capacity unregularized MLP memorized the training split, reaching train accuracy 1.0000, while validation macro F1 stayed near 0.69 and validation loss rose sharply. Increasing dense capacity alone does not solve the task; it mainly increases memorization. The best MLP result remains the smaller regularized `hidden500 + dropout0.50` model.
+
+### Limitations
+
+Only one high-capacity overfit point was tested. The run uses early stopping by validation macro F1 and reloads the best checkpoint before external evaluation, so the external metrics correspond to epoch 33 rather than the final memorized epoch.
+
+### Next step
+
+Use this overfitting trace as a reference point. For MLP tuning, prefer regularization and batch-size experiments over adding dense capacity. For the main model path, return to CNN/data augmentation because convolutional structure remains far more effective.
+
+
+## 2026-05-31 - Higher-frequency-resolution log-mel CNN input
+
+### Goal / hypothesis
+
+Test whether a more information-dense log-mel representation improves CNN generalization by increasing frequency resolution from 80 to 128 mel bands while keeping the same 6-second duration and approximately the same time resolution.
+
+### Code / reproducibility change
+
+Added explicit spectrogram parameters to the log-mel feature path:
+
+```text
+src/features.py: extract_log_mel now accepts n_fft, hop_length, win_length
+src/build_logmel_cache.py: CLI now accepts --n-fft, --hop-length, --win-length
+cache metadata now records n_fft, hop_length, win_length
+```
+
+### Input data
+
+```text
+train subset: data/processed/subset_binary_train_9000.csv
+test subset: data/processed/subset_binary_test_2400.csv
+train cache: data/features/subset_binary_train_9000_logmel_6s_128mels_fft1024_hop512.npz
+test cache: data/features/subset_binary_test_2400_logmel_6s_128mels_fft1024_hop512.npz
+train rows: 18000, balanced 9000 negative / 9000 positive
+test rows: 4800, balanced 2400 negative / 2400 positive
+input spectrogram shape: (128, 188)
+sample_rate: 16000
+duration: 6.0
+n_mels: 128
+n_fft: 1024
+hop_length: 512
+win_length: librosa default / null
+```
+
+### Commands / scripts used
+
+```bash
+.venv/bin/python -m src.build_logmel_cache --subset-path data/processed/subset_binary_train_9000.csv --output data/features/subset_binary_train_9000_logmel_6s_128mels_fft1024_hop512.npz --duration 6 --n-mels 128 --n-fft 1024 --hop-length 512
+.venv/bin/python -m src.build_logmel_cache --subset-path data/processed/subset_binary_test_2400.csv --output data/features/subset_binary_test_2400_logmel_6s_128mels_fft1024_hop512.npz --duration 6 --n-mels 128 --n-fft 1024 --hop-length 512
+.venv/bin/python -m src.train_cnn_logmel --features-path data/features/subset_binary_train_9000_logmel_6s_128mels_fft1024_hop512.npz --eval-features-path data/features/subset_binary_test_2400_logmel_6s_128mels_fft1024_hop512.npz --run-name cnn_logmel_binary_9000_6s128mels_fft1024_hop512_wide_pool4_hidden512_1200ep_gpu --epochs 1200 --batch-size 128 --channels 32,64,128 --pool-output-size 4 --classifier-hidden-size 512 --scheduler reduce_on_plateau --lr-factor 0.5 --lr-patience 10 --patience 120 --device cuda
+```
+
+### Important parameters
+
+```text
+model: CompactLogMelCNN
+channels: 32,64,128
+conv_kernel_size: 3x3
+pool_output_size: 4
+pool_kernel_size: 2
+pool_strides: 2,2
+classifier head: 2048 -> 512 -> 2
+dropout: 0.25
+batch_size: 128
+scheduler: reduce_on_plateau
+patience: 120
+device: cuda
+```
+
+### Metrics and artifacts
+
+```text
+run_name: cnn_logmel_binary_9000_6s128mels_fft1024_hop512_wide_pool4_hidden512_1200ep_gpu
+artifact dir: artifacts/cnn_logmel_binary_9000_6s128mels_fft1024_hop512_wide_pool4_hidden512_1200ep_gpu/
+epochs completed: 223
+stopped early: true
+best epoch: 103
+best validation accuracy: 0.8331
+best validation macro F1: 0.8330
+best validation threshold: 0.50
+best threshold validation macro F1: 0.8330
+external eval accuracy: 0.8273
+external eval precision macro: 0.8275
+external eval recall macro: 0.8273
+external eval macro F1: 0.8273
+duration: 2484.4 seconds
+mean epoch time: 11.09 seconds
+```
+
+### Comparison table
+
+```text
+run | model | data/subset | key parameters | accuracy | macro F1 | interpretation
+----|-------|-------------|----------------|----------|----------|----------------
+cnn_logmel_binary_9000_6s80mels_wide_pool4_hidden512_1200ep_gpu | CompactLogMelCNN | 9000/class train, 2400/class eval | 6s; 80 mels; librosa default FFT/hop; 3x3 conv; head 2048->512->2 | 0.8471 | 0.8470 | current best external result
+cnn_logmel_binary_9000_6s128mels_fft1024_hop512_wide_pool4_hidden512_1200ep_gpu | CompactLogMelCNN | 9000/class train, 2400/class eval | 6s; 128 mels; n_fft 1024; hop 512; 3x3 conv; head 2048->512->2 | 0.8273 | 0.8273 | higher frequency resolution was slower and worse
+mlp_logmel_binary_9000_6s80mels_hidden500_dropout050_1200ep_gpu | LogMelMLP | 9000/class train, 2400/class eval | Flatten 80x188 -> 500 -> 2; dropout 0.50 | 0.6938 | 0.6934 | best MLP, far below CNN
+```
+
+### Interpretation
+
+Increasing the mel frequency resolution from 80 to 128 did not improve the CNN. Validation peaked lower than the 80-mel baseline and external macro F1 dropped from 0.8470 to 0.8273, while mean epoch time increased from about 7.15 seconds to 11.09 seconds. A larger spectrogram is therefore not automatically more useful; the added frequency detail may add noise or may require a different architecture/pooling schedule.
+
+### Limitations
+
+This tested only one richer representation: 128 mel bands with `n_fft=1024` and `hop_length=512`. It did not test higher time resolution (`hop_length=256`), 7-second context, per-dataset normalization, or architecture changes tuned specifically for taller spectrograms.
+
+### Next step
+
+Do not replace the current 80-mel CNN baseline with this 128-mel variant. If continuing input-representation search, prefer a smaller controlled test of time resolution (`80 mels, hop_length=256`) or data augmentation on the current best 80-mel representation.
+
+
+## 2026-05-31 - Higher-time-resolution log-mel CNN input
+
+### Goal / hypothesis
+
+Test whether increasing time resolution improves CNN generalization by keeping 80 mel bands and reducing hop length from the effective baseline/default resolution to `hop_length=256`.
+
+### Input data
+
+```text
+train subset: data/processed/subset_binary_train_9000.csv
+test subset: data/processed/subset_binary_test_2400.csv
+train cache: data/features/subset_binary_train_9000_logmel_6s_80mels_fft1024_hop256.npz
+test cache: data/features/subset_binary_test_2400_logmel_6s_80mels_fft1024_hop256.npz
+train rows: 18000, balanced 9000 negative / 9000 positive
+test rows: 4800, balanced 2400 negative / 2400 positive
+input spectrogram shape: (80, 376)
+sample_rate: 16000
+duration: 6.0
+n_mels: 80
+n_fft: 1024
+hop_length: 256
+win_length: librosa default / null
+```
+
+### Commands / scripts used
+
+```bash
+.venv/bin/python -m src.build_logmel_cache --subset-path data/processed/subset_binary_train_9000.csv --output data/features/subset_binary_train_9000_logmel_6s_80mels_fft1024_hop256.npz --duration 6 --n-mels 80 --n-fft 1024 --hop-length 256
+.venv/bin/python -m src.build_logmel_cache --subset-path data/processed/subset_binary_test_2400.csv --output data/features/subset_binary_test_2400_logmel_6s_80mels_fft1024_hop256.npz --duration 6 --n-mels 80 --n-fft 1024 --hop-length 256
+.venv/bin/python -m src.train_cnn_logmel --features-path data/features/subset_binary_train_9000_logmel_6s_80mels_fft1024_hop256.npz --eval-features-path data/features/subset_binary_test_2400_logmel_6s_80mels_fft1024_hop256.npz --run-name cnn_logmel_binary_9000_6s80mels_fft1024_hop256_wide_pool4_hidden512_1200ep_gpu --epochs 1200 --batch-size 128 --channels 32,64,128 --pool-output-size 4 --classifier-hidden-size 512 --scheduler reduce_on_plateau --lr-factor 0.5 --lr-patience 10 --patience 120 --device cuda
+```
+
+### Important parameters
+
+```text
+model: CompactLogMelCNN
+channels: 32,64,128
+conv_kernel_size: 3x3
+pool_output_size: 4
+pool_kernel_size: 2
+pool_strides: 2,2
+classifier head: 2048 -> 512 -> 2
+dropout: 0.25
+batch_size: 128
+scheduler: reduce_on_plateau
+patience: 120
+device: cuda
+```
+
+### Metrics and artifacts
+
+```text
+run_name: cnn_logmel_binary_9000_6s80mels_fft1024_hop256_wide_pool4_hidden512_1200ep_gpu
+artifact dir: artifacts/cnn_logmel_binary_9000_6s80mels_fft1024_hop256_wide_pool4_hidden512_1200ep_gpu/
+epochs completed: 229
+stopped early: true
+best epoch: 109
+best validation accuracy: 0.8519
+best validation macro F1: 0.8519
+best validation threshold: 0.50
+best threshold validation macro F1: 0.8519
+external eval accuracy: 0.8438
+external eval precision macro: 0.8438
+external eval recall macro: 0.8438
+external eval macro F1: 0.8438
+duration: 3183.1 seconds
+mean epoch time: 13.83 seconds
+```
+
+### Comparison table
+
+```text
+run | model | data/subset | key parameters | accuracy | macro F1 | interpretation
+----|-------|-------------|----------------|----------|----------|----------------
+cnn_logmel_binary_9000_6s80mels_wide_pool4_hidden512_1200ep_gpu | CompactLogMelCNN | 9000/class train, 2400/class eval | 6s; 80 mels; shape 80x188; 3x3 conv; head 2048->512->2 | 0.8471 | 0.8470 | current best external result
+cnn_logmel_binary_9000_6s80mels_fft1024_hop256_wide_pool4_hidden512_1200ep_gpu | CompactLogMelCNN | 9000/class train, 2400/class eval | 6s; 80 mels; n_fft 1024; hop 256; shape 80x376; 3x3 conv; head 2048->512->2 | 0.8438 | 0.8438 | best validation among CNNs, but external slightly below baseline
+cnn_logmel_binary_9000_6s128mels_fft1024_hop512_wide_pool4_hidden512_1200ep_gpu | CompactLogMelCNN | 9000/class train, 2400/class eval | 6s; 128 mels; n_fft 1024; hop 512; shape 128x188 | 0.8273 | 0.8273 | more frequency resolution was slower and worse
+```
+
+### Interpretation
+
+Increasing time resolution was much more promising than increasing mel frequency resolution. The `hop_length=256` input reached the best internal validation macro F1 so far among CNN runs (`0.8519`), but external macro F1 was `0.8438`, slightly below the current best external baseline `0.8470`. The result suggests that finer time resolution may help the validation split but does not yet improve external generalization under this architecture and seed. It also increases mean epoch time from about 7.15 seconds to 13.83 seconds.
+
+### Limitations
+
+The run changes both explicit FFT settings and time resolution relative to the original implicit-librosa baseline, so the comparison is not purely hop-length-only. Only one seed and one architecture were tested. The longer time axis may benefit from adjusted pooling or temporal augmentation rather than the unchanged CNN schedule.
+
+### Next step
+
+Keep the original 80x188 CNN as the external best. Treat `80x376 hop256` as a promising representation for follow-up, especially with temporal augmentation or adjusted pooling, but do not replace the baseline without an external improvement.
+
+
+## 2026-05-31 - Larger adaptive pooling grid for high-time-resolution CNN
+
+### Goal / hypothesis
+
+Test whether the promising `80x376` high-time-resolution input benefits from preserving more pooled time-frequency information before the classifier by increasing final adaptive pooling from `4x4` to `6x6`.
+
+### Input data
+
+```text
+train cache: data/features/subset_binary_train_9000_logmel_6s_80mels_fft1024_hop256.npz
+test cache: data/features/subset_binary_test_2400_logmel_6s_80mels_fft1024_hop256.npz
+train rows: 18000, balanced 9000 negative / 9000 positive
+test rows: 4800, balanced 2400 negative / 2400 positive
+input spectrogram shape: (80, 376)
+sample_rate: 16000
+duration: 6.0
+n_mels: 80
+n_fft: 1024
+hop_length: 256
+```
+
+### Commands / scripts used
+
+```bash
+.venv/bin/python -m src.train_cnn_logmel --features-path data/features/subset_binary_train_9000_logmel_6s_80mels_fft1024_hop256.npz --eval-features-path data/features/subset_binary_test_2400_logmel_6s_80mels_fft1024_hop256.npz --run-name cnn_logmel_binary_9000_6s80mels_fft1024_hop256_wide_pool6_hidden512_1200ep_gpu --epochs 1200 --batch-size 128 --channels 32,64,128 --pool-output-size 6 --classifier-hidden-size 512 --scheduler reduce_on_plateau --lr-factor 0.5 --lr-patience 10 --patience 120 --device cuda
+```
+
+### Important parameters
+
+```text
+model: CompactLogMelCNN
+channels: 32,64,128
+conv_kernel_size: 3x3
+pool_output_size: 6
+pool_kernel_size: 2
+pool_strides: 2,2
+classifier input features: 4608
+classifier head: 4608 -> 512 -> 2
+dropout: 0.25
+batch_size: 128
+scheduler: reduce_on_plateau
+patience: 120
+device: cuda
+```
+
+### Metrics and artifacts
+
+```text
+run_name: cnn_logmel_binary_9000_6s80mels_fft1024_hop256_wide_pool6_hidden512_1200ep_gpu
+artifact dir: artifacts/cnn_logmel_binary_9000_6s80mels_fft1024_hop256_wide_pool6_hidden512_1200ep_gpu/
+epochs completed: 207
+stopped early: true
+best epoch: 87
+best validation accuracy: 0.8572
+best validation macro F1: 0.8572
+best validation threshold: 0.50
+best threshold validation macro F1: 0.8572
+external eval accuracy: 0.8475
+external eval precision macro: 0.8477
+external eval recall macro: 0.8475
+external eval macro F1: 0.8475
+duration: 2897.6 seconds
+mean epoch time: 13.92 seconds
+```
+
+### Comparison table
+
+```text
+run | model | data/subset | key parameters | accuracy | macro F1 | interpretation
+----|-------|-------------|----------------|----------|----------|----------------
+cnn_logmel_binary_9000_6s80mels_wide_pool4_hidden512_1200ep_gpu | CompactLogMelCNN | 9000/class train, 2400/class eval | 80x188; pool 4; head 2048->512->2 | 0.8471 | 0.8470 | previous best external result
+cnn_logmel_binary_9000_6s80mels_fft1024_hop256_wide_pool4_hidden512_1200ep_gpu | CompactLogMelCNN | 9000/class train, 2400/class eval | 80x376; pool 4; head 2048->512->2 | 0.8438 | 0.8438 | higher time resolution alone did not beat baseline
+cnn_logmel_binary_9000_6s80mels_fft1024_hop256_wide_pool6_hidden512_1200ep_gpu | CompactLogMelCNN | 9000/class train, 2400/class eval | 80x376; pool 6; head 4608->512->2 | 0.8475 | 0.8475 | new best external result, but margin is small
+```
+
+### Interpretation
+
+Increasing final adaptive pooling from `4x4` to `6x6` helped the high-time-resolution `80x376` representation. The run reached the best internal validation macro F1 so far (`0.8572`) and slightly improved external macro F1 from the previous best `0.8470` to `0.8475`. The improvement is small, but it supports the hypothesis that the longer time axis benefits from passing a larger pooled grid to the classifier. The cost is high: mean epoch time is about 13.9 seconds.
+
+### Limitations
+
+The external improvement is only about 0.0005 macro F1 over the previous best and was measured on one seed/split. The larger classifier input increases capacity and may be more sensitive to regularization. The run did not test augmentation, multiple seeds, or alternative pooling grids such as `5x5` or `8x8`.
+
+### Next step
+
+Treat `80x376 hop256 + pool6` as the new tentative best, but verify before relying on it heavily. Good follow-ups are: repeat with another seed, add augmentation to the `hop256 + pool6` setup, or test a slightly stronger dropout/weight decay to reduce sensitivity from the larger classifier head.
+
+## 2026-06-01 - Non-neutral external evaluation check for best CNN
+
+### Goal / hypothesis
+
+Verify whether the current best CNN can be evaluated on only positive and
+negative external test items without neutral samples. Hypothesis: the current
+binary external test subset already excludes `neutral`, so the filtered metric
+should match the existing external metric.
+
+### Input data
+
+```text
+predictions: artifacts/cnn_logmel_binary_9000_6s80mels_fft1024_hop256_wide_pool6_hidden512_1200ep_gpu/predictions.csv
+run_name: cnn_logmel_binary_9000_6s80mels_fft1024_hop256_wide_pool6_hidden512_1200ep_gpu
+rows total: 4800
+source_label counts: angry 1346, positive 2400, sad 1054
+target_label counts: 0 2400, 1 2400
+neutral rows: 0
+```
+
+### Commands / scripts used
+
+```bash
+.venv/bin/python - <<'PY'
+from pathlib import Path
+import json
+import pandas as pd
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, classification_report, confusion_matrix
+
+run = "cnn_logmel_binary_9000_6s80mels_fft1024_hop256_wide_pool6_hidden512_1200ep_gpu"
+path = Path("artifacts") / run / "predictions.csv"
+df = pd.read_csv(path)
+sub = df.loc[~df["source_label"].astype(str).str.lower().eq("neutral")]
+y = sub["target_label"].astype(int)
+p = sub["predicted_label"].astype(int)
+print(accuracy_score(y, p), precision_score(y, p, average="macro"), recall_score(y, p, average="macro"), f1_score(y, p, average="macro"))
+print(confusion_matrix(y, p))
+print(classification_report(y, p, digits=4))
+PY
+```
+
+### Important parameters
+
+```text
+filter: source_label != neutral
+label 0: negative class, merged angry + sad
+label 1: positive class
+metric averaging: macro
+```
+
+### Metrics and artifacts
+
+```text
+artifact: artifacts/cnn_logmel_binary_9000_6s80mels_fft1024_hop256_wide_pool6_hidden512_1200ep_gpu/non_neutral_eval_metrics.json
+non-neutral rows: 4800
+accuracy: 0.8475
+precision macro: 0.8477
+recall macro: 0.8475
+macro F1: 0.8475
+confusion matrix [[true0/pred0, true0/pred1], [true1/pred0, true1/pred1]]: [[2059, 341], [391, 2009]]
+class 0 precision/recall/F1: 0.8404 / 0.8579 / 0.8491
+class 1 precision/recall/F1: 0.8549 / 0.8371 / 0.8459
+source angry recall: 0.8351
+source sad recall: 0.8871
+source positive recall: 0.8371
+```
+
+### Comparison table
+
+```text
+run | model | data/subset | key parameters | accuracy | macro F1 | interpretation
+----|-------|-------------|----------------|----------|----------|----------------
+cnn_logmel_binary_9000_6s80mels_fft1024_hop256_wide_pool6_hidden512_1200ep_gpu | CompactLogMelCNN | full binary external test, 2400/class | 80x376; pool 6; head 4608->512->2 | 0.8475 | 0.8475 | current external score
+cnn_logmel_binary_9000_6s80mels_fft1024_hop256_wide_pool6_hidden512_1200ep_gpu_non_neutral_eval | CompactLogMelCNN | source_label != neutral, 4800 rows | same predictions; neutral filter | 0.8475 | 0.8475 | identical because the binary test has 0 neutral rows
+```
+
+### Interpretation
+
+The binary external test already measures positive vs negative without neutral
+items. The negative class is internally mixed: `sad` has higher recall
+(`0.8871`) than `angry` (`0.8351`), while positive recall is `0.8371`.
+
+### Limitations
+
+This is a post-hoc analysis of one predictions file, not a new training run.
+It does not evaluate neutral rejection or a three-class setup.
+
+### Next step
+
+If neutral behavior matters, build a separate evaluation set with `positive`,
+negative, and `neutral` source labels, then report either three-class metrics or
+binary positive/negative metrics after explicitly filtering neutral rows.
+
+## 2026-06-01 - Listening review set for best CNN extremes
+
+### Goal / hypothesis
+
+Create a compact audio folder for subjective inspection of the best CNN
+predictions: very clear correct examples and very confident mistakes for both
+positive and negative classes. Hypothesis: listening to extreme cases will help
+identify whether the model is learning meaningful emotional cues or dataset
+artifacts.
+
+### Input data
+
+```text
+predictions: artifacts/cnn_logmel_binary_9000_6s80mels_fft1024_hop256_wide_pool6_hidden512_1200ep_gpu/predictions.csv
+source audio: data/dusha_emotion_audio/data/test/*.wav
+run_name: cnn_logmel_binary_9000_6s80mels_fft1024_hop256_wide_pool6_hidden512_1200ep_gpu
+```
+
+### Commands / scripts used
+
+```bash
+.venv/bin/python
+```
+
+The script loaded `predictions.csv`, computed
+`abs(positive_probability - target_label)`, selected 40 examples per group, and
+copied the source `.wav` files into a dedicated listening review directory.
+
+### Important parameters
+
+```text
+examples per group: 40
+clear positive hits: target_label=1, predicted_label=1, smallest abs(prob - 1)
+clear negative hits: target_label=0, predicted_label=0, smallest abs(prob - 0)
+positive confident misses: target_label=1, predicted_label=0, largest abs(prob - 1)
+negative confident misses: target_label=0, predicted_label=1, largest abs(prob - 0)
+```
+
+### Metrics and artifacts
+
+```text
+artifact dir: artifacts/listening_review/best_cnn_pool6_extreme_confidence_2026-06-01/
+README: artifacts/listening_review/best_cnn_pool6_extreme_confidence_2026-06-01/README.md
+summary: artifacts/listening_review/best_cnn_pool6_extreme_confidence_2026-06-01/summary.csv
+combined manifest: artifacts/listening_review/best_cnn_pool6_extreme_confidence_2026-06-01/manifest_all.csv
+copied wav files: 160
+missing source files: 0
+```
+
+```text
+group | available | selected | copied | positive_probability range | mean positive_probability
+------|-----------|----------|--------|----------------------------|--------------------------
+01_positive_clear_hits_true_positive_highest_confidence | 2009 | 40 | 40 | 0.999999-1.000000 | 1.000000
+02_negative_clear_hits_true_negative_highest_confidence | 2059 | 40 | 40 | 0.000001-0.000143 | 0.000079
+03_positive_confident_misses_heard_as_negative | 391 | 40 | 40 | 0.000586-0.028277 | 0.015823
+04_negative_confident_misses_heard_as_positive | 341 | 40 | 40 | 0.958615-0.999889 | 0.983215
+```
+
+### Comparison table
+
+```text
+run | model | data/subset | key parameters | accuracy | macro F1 | interpretation
+----|-------|-------------|----------------|----------|----------|----------------
+cnn_logmel_binary_9000_6s80mels_fft1024_hop256_wide_pool6_hidden512_1200ep_gpu | CompactLogMelCNN | external test predictions | 40 extreme samples per group | 0.8475 | 0.8475 | listening review set derived from current best model
+```
+
+### Interpretation
+
+The listening set separates "what the model finds obvious" from "what the model
+gets confidently wrong". This should make qualitative inspection more useful
+than random sampling because the groups correspond to different model behavior
+modes.
+
+### Limitations
+
+The selection is biased toward extreme confidence and is not representative of
+the whole test distribution. The correct groups are especially saturated near
+probability 0 or 1, so they should be used for qualitative inspection, not as a
+new metric.
+
+### Next step
+
+Listen through the four folders and record recurring patterns: label noise,
+speaker/channel artifacts, ambiguous emotion, short or low-quality audio,
+background noise, or lexical cues that may explain confident mistakes.
+
+## 2026-06-17 - Diana code functionality summary
+
+### Goal / hypothesis
+
+Create a plain-language project summary for Diana explaining the current code
+functionality, SVM/CNN workflow, selected feature vectors, recent experiments,
+and main limitations.
+
+### Input data
+
+```text
+source files: src/features.py, src/train_sklearn.py, src/tune_sklearn.py, src/train_cnn_logmel.py, src/train_mlp_logmel.py
+experiment source: EXPERIMENT_LOG.md
+metrics source: artifacts/*/metrics.json
+```
+
+### Commands / scripts used
+
+```text
+manual repository inspection and Markdown summary writing
+```
+
+### Important parameters
+
+```text
+summary file: DIANA_CODE_FUNCTIONALITY_SUMMARY.md
+audience: non-code / thesis collaborator
+scope: current binary DUSHA emotion pipeline, sklearn/SVM features, log-mel CNN, MLP baseline, latest metrics
+```
+
+### Metrics and artifacts
+
+```text
+artifact: DIANA_CODE_FUNCTIONALITY_SUMMARY.md
+primary current CNN result documented: accuracy 0.8475, macro F1 0.8475
+primary SVM baseline documented: accuracy 0.7200, macro F1 0.7195
+```
+
+### Comparison table
+
+```text
+run | model | data/subset | key parameters | accuracy | macro F1 | interpretation
+----|-------|-------------|----------------|----------|----------|----------------
+sklearn_svm_rbf_binary_1000_tuned | StandardScaler + SVC(kernel='rbf') | 1000/class train, 1000/class eval | 48 summary features; C=10.0; gamma=0.003; threshold=0.46 | 0.7200 | 0.7195 | compact CPU baseline
+cnn_logmel_binary_9000_6s80mels_fft1024_hop256_wide_pool6_hidden512_1200ep_gpu | CompactLogMelCNN | 9000/class train, 2400/class eval | 80x376 log-mel; pool 6; head 4608->512->2 | 0.8475 | 0.8475 | current best documented model
+```
+
+### Interpretation
+
+The summary consolidates the code functionality and latest experiment results
+into a collaborator-facing document. It emphasizes that sklearn/SVM uses 48
+handcrafted summary features, while CNN uses log-mel spectrograms and currently
+has the strongest result.
+
+### Limitations
+
+This is a documentation step, not a new model run. The summary reflects the
+current local experiment log and available metrics; it does not add new
+validation or repeat experiments across seeds.
+
+### Next step
+
+Send `DIANA_CODE_FUNCTIONALITY_SUMMARY.md` to Diana and use any follow-up
+questions to decide whether to add a shorter thesis-ready methodology section
+or a more formal model comparison table.
+
+## 2026-06-17 - Diana source and log archive
+
+### Goal / hypothesis
+
+Create a compact archive for Diana containing project source files and
+documentation/log files without local datasets, generated artifacts, virtual
+environment files, or Python bytecode caches.
+
+### Input data
+
+```text
+included docs/logs: AGENTS.md, CODEX_PROMPT.md, DIANA_CODE_FUNCTIONALITY_SUMMARY.md, EXPERIMENT_LOG.md, PROJECT_PLAN.md, README.md, SETUP_NOTES.md, SOURCES.md, START_CODEX_PROMPT.txt, requirements.txt
+included source dirs: src/, legacy/, notebooks/
+excluded local/generated dirs: data/, artifacts/, .venv/, src/__pycache__/
+```
+
+### Commands / scripts used
+
+```bash
+tar --exclude='src/__pycache__' --exclude='*/__pycache__' -czf vox_games_sources_logs_for_diana_2026-06-17.tar.gz AGENTS.md CODEX_PROMPT.md DIANA_CODE_FUNCTIONALITY_SUMMARY.md EXPERIMENT_LOG.md PROJECT_PLAN.md README.md SETUP_NOTES.md SOURCES.md START_CODEX_PROMPT.txt requirements.txt src legacy notebooks
+tar -tzf vox_games_sources_logs_for_diana_2026-06-17.tar.gz
+tar -tzf vox_games_sources_logs_for_diana_2026-06-17.tar.gz | rg '__pycache__|\.pyc|^data/|^artifacts/|^\.venv/'
+```
+
+### Important parameters
+
+```text
+archive format: tar.gz
+archive path: vox_games_sources_logs_for_diana_2026-06-17.tar.gz
+archive size: 74K
+privacy/storage policy: no data/, no generated artifacts/, no .venv/, no __pycache__ or .pyc
+```
+
+### Metrics and artifacts
+
+```text
+artifact: vox_games_sources_logs_for_diana_2026-06-17.tar.gz
+verification: archive listing inspected; forbidden-path rg check returned no matches
+```
+
+### Comparison table
+
+```text
+run | model | data/subset | key parameters | accuracy | macro F1 | interpretation
+----|-------|-------------|----------------|----------|----------|----------------
+diana_sources_logs_archive_2026-06-17 | documentation/archive | source + logs only | excludes data/artifacts/.venv/__pycache__ | n/a | n/a | handoff package for Diana
+```
+
+### Interpretation
+
+The archive is suitable for sending as a lightweight project snapshot with code
+and written experiment context, while avoiding local datasets and generated
+model artifacts.
+
+### Limitations
+
+The archive does not include audio data, feature caches, trained models,
+prediction CSV files, or confusion matrix images. Those remain local/generated
+artifacts and are summarized in `EXPERIMENT_LOG.md`.
+
+### Next step
+
+Send `vox_games_sources_logs_for_diana_2026-06-17.tar.gz` together with the
+plain-language summary, or unpack-check it on another machine if Diana needs a
+fully reproducible source snapshot.
+
+## 2026-06-17 - Local browser microphone inference demo
+
+### Goal / hypothesis
+
+Build a small local web application that records microphone audio in the browser
+and sends it to the current best CNN checkpoint for binary positive/negative
+inference. Hypothesis: a localhost browser demo avoids HTTPS complexity during
+development while providing a more useful demonstration interface than a Tkinter
+prototype.
+
+### Input data
+
+```text
+checkpoint: artifacts/cnn_logmel_binary_9000_6s80mels_fft1024_hop256_wide_pool6_hidden512_1200ep_gpu/model.pt
+checkpoint size: 9.4M
+model run: cnn_logmel_binary_9000_6s80mels_fft1024_hop256_wide_pool6_hidden512_1200ep_gpu
+frontend input: browser microphone PCM encoded as WAV
+backend input endpoint: POST /api/predict with Content-Type audio/wav
+```
+
+### Commands / scripts used
+
+```bash
+.venv/bin/pip install -r requirements.txt
+.venv/bin/python -m py_compile src/web_demo.py
+node --check web/app.js
+.venv/bin/python - <<'PY'
+from io import BytesIO
+import numpy as np
+import soundfile as sf
+from src.web_demo import load_model, predict_wav_bytes
+
+model, device = load_model()
+print(type(model).__name__, device)
+buf = BytesIO()
+sf.write(buf, np.zeros(16000, dtype=np.float32), 16000, format='WAV')
+result = predict_wav_bytes(buf.getvalue())
+print(result['label'], round(result['positive_probability'], 4), round(result['confidence'], 4))
+PY
+.venv/bin/python -m uvicorn src.web_demo:app --host 127.0.0.1 --port 8000
+curl -s http://127.0.0.1:8000/api/health
+curl -s -X POST -H 'Content-Type: audio/wav' --data-binary @/tmp/vox_demo_silence.wav http://127.0.0.1:8000/api/predict
+```
+
+### Important parameters
+
+```text
+frontend files: web/index.html, web/styles.css, web/app.js
+backend file: src/web_demo.py
+server: FastAPI + Uvicorn
+local URL: http://127.0.0.1:8000
+browser recording max duration: 6 seconds
+model sample_rate: 16000
+model duration: 6.0
+n_mels: 80
+n_fft: 1024
+hop_length: 256
+CNN channels: 32,64,128
+adaptive pooling: 6x6
+classifier head: 4608 -> 512 -> 2
+threshold: 0.5
+```
+
+### Metrics and artifacts
+
+```text
+new artifact/source: src/web_demo.py
+new artifact/source: web/index.html
+new artifact/source: web/styles.css
+new artifact/source: web/app.js
+updated docs: README.md
+updated dependencies: requirements.txt
+health endpoint: {"ok": true, "device": "cuda"}
+synthetic WAV endpoint result: label negative, positive_probability 0.0732, confidence 0.9268
+```
+
+### Comparison table
+
+```text
+run | model | data/subset | key parameters | accuracy | macro F1 | interpretation
+----|-------|-------------|----------------|----------|----------|----------------
+cnn_logmel_binary_9000_6s80mels_fft1024_hop256_wide_pool6_hidden512_1200ep_gpu | CompactLogMelCNN | 9000/class train, 2400/class eval | 80x376 log-mel; pool 6; head 4608->512->2 | 0.8475 | 0.8475 | checkpoint used by web demo
+web_demo_localhost_smoke_2026-06-17 | FastAPI browser demo | synthetic silent WAV | POST /api/predict; same model preprocessing | n/a | n/a | endpoint and model-loading smoke test passed
+```
+
+### Interpretation
+
+The local web demo can serve the browser UI and run the best CNN checkpoint
+through an HTTP API. The frontend records mono PCM audio and encodes it as WAV,
+which avoids relying on browser-specific `webm` decoding or system ffmpeg
+availability. `localhost` is acceptable for microphone access during local
+development, so HTTPS is not required for this MVP.
+
+### Limitations
+
+The browser microphone path still needs manual interactive testing because the
+agent cannot grant microphone permission from this environment. The model is
+binary only, so the UI reports positive/negative rather than neutral or
+multi-class emotion. The current endpoint does not store recordings, does not
+authenticate users, and is intended for local demo use only.
+
+### Next step
+
+Open `http://127.0.0.1:8000`, record a few real microphone samples, compare the
+UI predictions with subjective listening, and then decide whether to add upload
+from WAV files, a visible confidence warning for low-confidence predictions, or
+a small packaged archive for Diana.
+
+## 2026-06-21 - Pre-commit code review for web demo and log-mel trainers
+
+### Goal / hypothesis
+
+Review the current uncommitted implementation before committing the local web
+demo and log-mel trainer extensions. Hypothesis: the changes are coherent as a
+single project snapshot, but generated handoff archives should remain outside
+git.
+
+### Input data
+
+```text
+changed files: README.md, requirements.txt, src/features.py, src/build_logmel_cache.py, src/train_cnn_logmel.py, src/train_mlp_logmel.py, src/web_demo.py, web/
+documentation files: EXPERIMENT_LOG.md, DIANA_CODE_FUNCTIONALITY_SUMMARY.md
+excluded generated file: vox_games_sources_logs_for_diana_2026-06-17.tar.gz
+```
+
+### Commands / scripts used
+
+```bash
+git status --short
+git diff --stat
+git diff --check
+.venv/bin/python -m py_compile src/build_logmel_cache.py src/features.py src/train_cnn_logmel.py src/train_mlp_logmel.py src/web_demo.py
+node --check web/app.js
+```
+
+### Important parameters
+
+```text
+commit scope: source, documentation, frontend files, Python/FastAPI dependencies
+code fix: compute_classifier_input_features now accounts for custom pool_kernel_size and pool_strides when adaptive pooling is disabled
+archive policy: do not commit generated .tar.gz handoff archive
+```
+
+### Metrics and artifacts
+
+```text
+syntax checks: passed
+generated artifacts committed: none
+```
+
+### Comparison table
+
+```text
+run | model | data/subset | key parameters | accuracy | macro F1 | interpretation
+----|-------|-------------|----------------|----------|----------|----------------
+precommit_web_demo_logmel_review_2026-06-21 | code review / smoke checks | n/a | py_compile; node --check; git diff --check | n/a | n/a | source snapshot prepared for commit; generated archive excluded
+```
+
+### Interpretation
+
+The changed source files form a coherent snapshot around the local browser demo,
+configurable log-mel extraction, configurable CNN pooling/head parameters, and a
+log-mel MLP baseline.
+
+### Limitations
+
+This step checks syntax and diff hygiene only. It does not rerun training,
+evaluate model metrics, or manually test browser microphone permissions.
+
+### Next step
+
+Commit the source/documentation snapshot while leaving the generated `.tar.gz`
+archive untracked.

@@ -53,6 +53,31 @@ pip install -r requirements.txt
 
 PyTorch/torchaudio лучше ставить отдельно по `SETUP_NOTES.md`, особенно если машина с CUDA.
 
+## Локальное веб-демо с микрофоном
+
+Демо использует браузерный микрофон, локальный FastAPI backend и текущий лучший
+CNN checkpoint:
+
+```text
+artifacts/cnn_logmel_binary_9000_6s80mels_fft1024_hop256_wide_pool6_hidden512_1200ep_gpu/model.pt
+```
+
+Запуск:
+
+```bash
+.venv/bin/pip install -r requirements.txt
+.venv/bin/python -m uvicorn src.web_demo:app --host 127.0.0.1 --port 8000
+```
+
+Открыть:
+
+```text
+http://127.0.0.1:8000
+```
+
+На `localhost` браузер разрешает доступ к микрофону без HTTPS. Для удаленного
+доступа через интернет потребуется HTTPS.
+
 ## Первые команды, которые должен дать Codex
 
 ```bash

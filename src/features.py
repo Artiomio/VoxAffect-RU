@@ -73,6 +73,9 @@ def extract_log_mel(
     sample_rate: int = 16_000,
     duration: float = 3.0,
     n_mels: int = 64,
+    n_fft: int | None = None,
+    hop_length: int | None = None,
+    win_length: int | None = None,
 ) -> np.ndarray:
     """Extract a normalized log-mel spectrogram for later CNN work."""
 
@@ -83,7 +86,14 @@ def extract_log_mel(
     else:
         audio = audio[:target_len]
 
-    mel = librosa.feature.melspectrogram(y=audio, sr=sample_rate, n_mels=n_mels)
+    mel = librosa.feature.melspectrogram(
+        y=audio,
+        sr=sample_rate,
+        n_mels=n_mels,
+        n_fft=n_fft,
+        hop_length=hop_length,
+        win_length=win_length,
+    )
     log_mel = librosa.power_to_db(mel, ref=np.max)
     mean = float(log_mel.mean())
     std = float(log_mel.std())
