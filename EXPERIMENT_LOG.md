@@ -5006,6 +5006,8 @@ git log --oneline -8
 git ls-files
 git remote -v
 gh auth status
+gh auth login -h github.com --web --git-protocol https --scopes repo
+gh repo create VoxAffect-RU --public --source . --remote origin --push --description "Russian speech emotion classification experiments on DUSHA with sklearn and log-mel CNN baselines"
 rg security keyword scan over tracked public files, excluding data/artifacts/.venv/archive files
 ```
 
@@ -5030,8 +5032,10 @@ updated files:
   CODEX_PROMPT.md
   EXPERIMENT_LOG.md
 security scan result: no obvious tracked sensitive values found
-GitHub CLI status: account Artiomio configured, but the saved credential is invalid
-remote status: no git remotes configured before publication
+GitHub CLI status before refresh: account Artiomio configured, but the saved credential was invalid
+GitHub CLI status after refresh: logged in as Artiomio
+public repository: https://github.com/Artiomio/VoxAffect-RU
+remote status after publication: origin -> https://github.com/Artiomio/VoxAffect-RU.git
 ```
 
 ### Comparison table
@@ -5044,20 +5048,18 @@ public_readme_preparation_2026_09_11 | documentation | tracked repository files 
 
 ### Interpretation
 
-The repository is structurally suitable for public upload after local
-documentation cleanup. The README now foregrounds the strongest external metric
-and clearly distinguishes it from the higher internal validation score. The
-current blocker for direct GitHub publication is authentication: `gh auth
-status` reports an invalid saved credential for the configured `Artiomio`
-account.
+The repository was prepared and published as a public GitHub repository. The
+README now foregrounds the strongest external metric and clearly distinguishes
+it from the higher internal validation score. GitHub CLI authentication was
+refreshed via web login before creating the repository and pushing `main`.
 
 ### Limitations
 
-This step did not upload to GitHub because the local GitHub CLI credential must
-be refreshed first. No license file was added yet; choose a license explicitly
-before treating the repository as open source rather than just publicly visible.
+No license file was added yet; choose a license explicitly before treating the
+repository as open source rather than just publicly visible. The repository does
+not include local data, generated artifacts, or trained checkpoints.
 
 ### Next step
 
-Run `gh auth login -h github.com` or refresh the GitHub CLI token, then create a
-public repository named `VoxAffect-RU`, add it as `origin`, and push `main`.
+Optionally add repository topics and a license file, then consider adding a
+small model card or thesis-oriented results summary.
