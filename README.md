@@ -7,8 +7,61 @@ dataset inspection, balanced subset construction, CPU-friendly sklearn
 baselines, log-mel CNN training, evaluation artifacts, and a local microphone
 demo.
 
-The work was developed by Artem Peisakhovsky with Diana Peisakhovskaya's
-collaboration and consent to publish.
+The project originated in Diana Peisakhovskaya's thesis work and in ideas
+developed together with Artem Peisakhovsky. Diana's contribution is foundational:
+she provided the original thesis context and motivation, invested substantial
+time in the 2021 data-collection experiments, built part of the early
+YouTube-derived dataset, and later participated in human review and
+interpretation. Artem led much of the ML engineering, experimentation,
+reproducibility work, and the current codebase. The repository is published with
+Diana's collaboration and consent.
+
+## Project History and Collaboration
+
+### 2021: custom weakly supervised YouTube dataset
+
+The first version of the project did not start from a ready-made emotional
+speech dataset. We experimented with building our own dataset from spoken
+YouTube material.
+
+The approximate pipeline was:
+
+```text
+YouTube videos -> audio extraction / segmentation -> STT -> text sentiment -> weak label for the corresponding audio fragment
+```
+
+This was a weak-supervision / proxy-labeling approach: the emotional polarity of
+the recognized text was used as an indirect label for the corresponding audio.
+The labels were therefore noisy by design. Text sentiment is not the same thing
+as acoustic emotion or stress, STT introduces its own errors, and prosody can
+disagree with the literal text.
+
+Despite those limitations, the pipeline was a practical way to explore how a
+larger Russian speech dataset could be assembled without manually labeling every
+fragment. Diana spent a substantial amount of time on this stage: processing
+YouTube material, working through the collection pipeline, and building a real
+part of the early dataset.
+
+Some notebooks and experimental materials from this stage have been preserved
+outside the current repository and may be added later under `legacy/` as
+historical material.
+
+### 2025: reproducible thesis version on DUSHA
+
+Several years later, when the project was revived for the thesis, we deliberately
+chose a simpler and more reliable path instead of rebuilding the fragile YouTube
+collection pipeline under deadline pressure.
+
+The current project therefore uses DUSHA, a ready-made Russian emotional speech
+dataset with existing labels, and focuses on a reproducible ML pipeline:
+
+```text
+DUSHA audio -> label mapping -> balanced subsets -> features/log-mels -> models -> metrics -> validation samples
+```
+
+The goal was not to erase the earlier work. It was to turn the research idea
+into a version that could be completed, reproduced, evaluated, and explained
+clearly.
 
 ## Highlights
 
@@ -273,12 +326,16 @@ artifacts/cnn_logmel_binary_9000_6s80mels_fft1024_hop256_wide_pool6_hidden512_12
 
 ## Human Validation
 
-The project includes utilities for exporting compact review samples. Diana's
-role is human quality validation, not large-scale manual labeling:
+The current DUSHA-based phase includes utilities for exporting compact review
+samples. Diana participates in this human quality-validation step:
 
 ```text
 20-30 fragments -> ok / wrong / unclear / garbage / good example for thesis
 ```
+
+This small review sample is only one part of Diana's contribution to the overall
+project. Her earlier work included substantial hands-on dataset collection and
+curation for the original 2021 YouTube-based experiments described above.
 
 Example:
 
