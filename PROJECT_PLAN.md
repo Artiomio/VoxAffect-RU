@@ -19,7 +19,7 @@ audio -> labels -> features -> baseline model -> metrics -> small human validati
 Есть legacy notebook Дианы:
 
 ```text
-/home/art/projects/vox_games/legacy/diana_legacy.json.ipynb
+legacy/diana_legacy.json.ipynb
 ```
 
 В нём уже есть полезный каркас:

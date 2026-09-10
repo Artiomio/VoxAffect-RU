@@ -4976,3 +4976,88 @@ the class-1 sampling pool changed after excluding `sad`.
 
 Inspect class-1 composition and per-source-label recall for positive vs angry,
 then repeat the `neutral_vs_active_emotional` CNN on a larger balanced subset.
+
+## 2026-09-11 - Public repository preparation
+
+### Goal / hypothesis
+
+Prepare the project for publication as a public GitHub repository for portfolio
+review by employers and recruiters. Hypothesis: a concise public README with
+external metrics, reproducibility commands, dataset boundaries, and contributor
+roles will make the project easier to evaluate than the previous internal
+working README.
+
+### Input data
+
+```text
+repository: vox_games working tree
+tracked source/docs files only
+local data excluded: data/
+generated artifacts excluded: artifacts/
+local environment excluded: .venv/
+untracked local archive excluded: vox_games_sources_logs_for_diana_2026-06-17.tar.gz
+```
+
+### Commands / scripts used
+
+```bash
+git status --short
+git log --oneline -8
+git ls-files
+git remote -v
+gh auth status
+rg security keyword scan over tracked public files, excluding data/artifacts/.venv/archive files
+```
+
+### Important parameters
+
+```text
+public repository name selected: VoxAffect-RU
+README language: English
+headline metric: external test macro F1, not internal validation F1
+best external result quoted: 0.8475 accuracy / 0.8475 macro F1
+best validation check quoted with caveat: 0.8572 accuracy / 0.8572 macro F1
+contributors named with consent: Artem Peisakhovsky, Diana Peisakhovskaya
+```
+
+### Metrics and artifacts
+
+```text
+new generated ML artifacts: none
+updated files:
+  README.md
+  PROJECT_PLAN.md
+  CODEX_PROMPT.md
+  EXPERIMENT_LOG.md
+security scan result: no obvious tracked sensitive values found
+GitHub CLI status: account Artiomio configured, but the saved credential is invalid
+remote status: no git remotes configured before publication
+```
+
+### Comparison table
+
+```text
+run | model | data/subset | key parameters | accuracy | macro F1 | interpretation
+----|-------|-------------|----------------|----------|----------|----------------
+public_readme_preparation_2026_09_11 | documentation | tracked repository files | public README, result table, reproducibility commands, local data excluded | n/a | n/a | repository made more suitable for public portfolio review
+```
+
+### Interpretation
+
+The repository is structurally suitable for public upload after local
+documentation cleanup. The README now foregrounds the strongest external metric
+and clearly distinguishes it from the higher internal validation score. The
+current blocker for direct GitHub publication is authentication: `gh auth
+status` reports an invalid saved credential for the configured `Artiomio`
+account.
+
+### Limitations
+
+This step did not upload to GitHub because the local GitHub CLI credential must
+be refreshed first. No license file was added yet; choose a license explicitly
+before treating the repository as open source rather than just publicly visible.
+
+### Next step
+
+Run `gh auth login -h github.com` or refresh the GitHub CLI token, then create a
+public repository named `VoxAffect-RU`, add it as `origin`, and push `main`.

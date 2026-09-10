@@ -1,86 +1,83 @@
-# Vox Games / DUSHA Emotion MVP
+# VoxAffect-RU
 
-Минимальный проект для дипломного MVP по анализу эмоциональной окраски русской речи.
+Russian speech emotion classification experiments on the DUSHA dataset.
 
-## Идея
+This repository is a compact, reproducible MVP for audio emotion recognition:
+dataset inspection, balanced subset construction, CPU-friendly sklearn
+baselines, log-mel CNN training, evaluation artifacts, and a local microphone
+demo.
 
-Сначала делаем маленький воспроизводимый baseline:
+The work was developed by Artem Peisakhovsky with Diana Peisakhovskaya's
+collaboration and consent to publish.
 
-```text
-DUSHA subset -> features -> sklearn/CNN baseline -> metrics -> validation sample
-```
-
-Не начинаем с тяжёлого Wav2Vec2/HuBERT fine-tuning. Это можно оставить на второй этап.
-
-## Что уже есть
-
-Legacy notebook Дианы:
+## Highlights
 
 ```text
-legacy/diana_legacy.json.ipynb
+Best external result, binary valence task:
+accuracy: 0.8475
+macro F1: 0.8475
+
+Task:
+0 = negative = angry + sad
+1 = positive
+neutral and other labels excluded
+
+Model:
+CompactLogMelCNN
+6s audio, 16 kHz
+80 log-mel bands
+n_fft=1024, hop_length=256
+CNN channels 32,64,128
+adaptive pooling 6x6
+classifier head 4608 -> 512 -> 2
 ```
 
-Он полезен как исходный каркас:
+The best validation check for the same checkpoint reproduced `0.8572` accuracy
+and macro F1 on the internal validation split. The external test score is the
+number to quote for generalization.
 
-- `librosa`;
-- log-mel spectrogram;
-- PyTorch Dataset/DataLoader;
-- compact CNN;
-- train/eval loop.
+## Why This Project Exists
 
-Но он использует dummy white-noise data и случайные метки, поэтому это smoke test, а не содержательный эксперимент.
-
-## Первый шаг
-
-Попросить Codex прочитать:
+The goal is not to claim a state-of-the-art speech emotion model. The goal is a
+clear engineering pipeline for an applied thesis project:
 
 ```text
-AGENTS.md
-PROJECT_PLAN.md
-CODEX_PROMPT.md
-START_CODEX_PROMPT.txt
+DUSHA audio -> label mapping -> balanced subsets -> features/log-mels -> models -> metrics -> validation samples
 ```
 
-и продолжать работу с обязательным ведением `EXPERIMENT_LOG.md`.
+The project deliberately starts with simple, inspectable baselines before moving
+to a compact CNN. This makes the results easier to reproduce and explain.
 
-## Минимальный стек
+## Dataset
 
-Сначала:
-
-```bash
-pip install -r requirements.txt
-```
-
-PyTorch/torchaudio лучше ставить отдельно по `SETUP_NOTES.md`, особенно если машина с CUDA.
-
-## Локальное веб-демо с микрофоном
-
-Демо использует браузерный микрофон, локальный FastAPI backend и текущий лучший
-CNN checkpoint:
+The experiments use DUSHA emotional speech data:
 
 ```text
-artifacts/cnn_logmel_binary_9000_6s80mels_fft1024_hop256_wide_pool6_hidden512_1200ep_gpu/model.pt
+KELONMYOSA/dusha_emotion_audio
 ```
 
-Запуск:
-
-```bash
-.venv/bin/pip install -r requirements.txt
-.venv/bin/python -m uvicorn src.web_demo:app --host 127.0.0.1 --port 8000
-```
-
-Открыть:
+Local data is not committed. Put the extracted dataset under:
 
 ```text
-http://127.0.0.1:8000
+data/dusha_emotion_audio/data
 ```
 
-На `localhost` браузер разрешает доступ к микрофону без HTTPS. Для удаленного
-доступа через интернет потребуется HTTPS.
+The repository keeps only code, documentation, and reproducibility notes. Large
+generated files are ignored:
 
-## Задачи классификации
+```text
+data/
+artifacts/
+.venv/
+```
 
-Основная ранняя задача `binary` измеряет valence внутри эмоциональной речи:
+Important experiment results are summarized in `EXPERIMENT_LOG.md`.
+
+## Supported Tasks
+
+### Binary Valence
+
+The main historical benchmark in this repo:
 
 ```text
 0 = negative = angry + sad
@@ -88,8 +85,18 @@ http://127.0.0.1:8000
 excluded = neutral, other
 ```
 
-Отдельная задача `neutral_vs_emotional` измеряет наличие эмоциональной окраски
-как proxy для эмоциональной напряженности:
+Best external result:
+
+```text
+run: cnn_logmel_binary_9000_6s80mels_fft1024_hop256_wide_pool6_hidden512_1200ep_gpu
+accuracy: 0.8475
+macro F1: 0.8475
+eval rows: 4800, balanced 2400/class
+```
+
+### Neutral vs Emotional
+
+An arousal/proxy experiment:
 
 ```text
 0 = neutral
@@ -97,8 +104,16 @@ excluded = neutral, other
 excluded = other
 ```
 
-Вариант `neutral_vs_active_emotional` исключает `sad` и проверяет более активную
-эмоциональную окраску:
+Results on 1000/class train and 1000/class external eval:
+
+```text
+SVM RBF macro F1: 0.6619
+CNN log-mel macro F1: 0.6938
+```
+
+### Neutral vs Active Emotional
+
+A stricter arousal/proxy experiment that excludes sadness:
 
 ```text
 0 = neutral
@@ -106,129 +121,168 @@ excluded = other
 excluded = sad, other
 ```
 
-Метрики этих задач нельзя напрямую сравнивать как "лучше/хуже": первая
-разделяет направление эмоции, вторая отделяет нейтральную речь от эмоциональной.
+Results on 1000/class train and 1000/class external eval:
 
-## Первые команды, которые должен дать Codex
-
-```bash
-python -m src.inspect_dataset --dataset-name KELONMYOSA/dusha_emotion_audio --split train --sample-size 20
-python -m src.make_subset --samples-per-class 200 --task binary
-python -m src.train_sklearn --subset-path data/processed/subset_binary.csv
+```text
+SVM RBF macro F1: 0.7140
+CNN log-mel macro F1: 0.7720
 ```
 
-## Текущий локальный запуск
+This result suggests that `sad` behaves differently from active emotional speech
+and blurs the merged emotional class.
 
-Если DUSHA уже скачан и распакован в `data/dusha_emotion_audio/data`:
+## Result Summary
+
+```text
+run | model | task | data | accuracy | macro F1
+----|-------|------|------|----------|---------
+sklearn_svm_rbf_binary_1000_tuned | StandardScaler + RBF SVM | negative vs positive | 1000/class train, 1000/class eval | 0.7200 | 0.7195
+cnn_logmel_binary_1000_6s80mels_wide_pool4_1200ep_gpu | CompactLogMelCNN | negative vs positive | 1000/class train, 1000/class eval | 0.7575 | 0.7575
+cnn_logmel_binary_9000_6s80mels_wide_pool4_1200ep_gpu | CompactLogMelCNN | negative vs positive | 9000/class train, 2400/class eval | 0.8338 | 0.8337
+cnn_logmel_binary_9000_6s80mels_wide_pool4_hidden512_1200ep_gpu | CompactLogMelCNN | negative vs positive | 9000/class train, 2400/class eval | 0.8471 | 0.8470
+cnn_logmel_binary_9000_6s80mels_fft1024_hop256_wide_pool6_hidden512_1200ep_gpu | CompactLogMelCNN | negative vs positive | 9000/class train, 2400/class eval | 0.8475 | 0.8475
+sklearn_svm_rbf_neutral_vs_active_emotional_1000_tuned | StandardScaler + RBF SVM | neutral vs positive+angry | 1000/class train, 1000/class eval | 0.7145 | 0.7140
+cnn_logmel_neutral_vs_active_emotional_1000_6s80mels_fft1024_hop256_pool6_hidden512_300ep_gpu | CompactLogMelCNN | neutral vs positive+angry | 1000/class train, 1000/class eval | 0.7720 | 0.7720
+```
+
+## Repository Layout
+
+```text
+src/
+  inspect_dataset.py          Inspect local DUSHA metadata and label columns.
+  make_subset.py              Build balanced CSV subsets for supported tasks.
+  build_feature_cache.py      Extract compact sklearn features.
+  build_logmel_cache.py       Build fixed-size log-mel .npz caches.
+  train_sklearn.py            Train simple sklearn baselines.
+  tune_sklearn.py             Tune sklearn hyperparameters and thresholds.
+  train_cnn_logmel.py         Train compact PyTorch CNNs on log-mel caches.
+  train_mlp_logmel.py         Train flattened log-mel MLP baselines.
+  compare_predictions.py      Compare prediction CSVs between runs.
+  make_validation_sample.py   Sample examples for human review.
+  export_validation_sample.py Export audio snippets for review.
+  web_demo.py                 FastAPI backend for local microphone demo.
+
+web/
+  index.html
+  styles.css
+  app.js
+
+legacy/
+  diana_legacy.json.ipynb     Original prototype notebook.
+
+EXPERIMENT_LOG.md             Canonical experiment journal.
+PROJECT_PLAN.md               Project plan and scope.
+SETUP_NOTES.md                Environment setup notes.
+SOURCES.md                    External references.
+```
+
+## Setup
+
+Create a virtual environment and install the CPU-friendly dependencies:
 
 ```bash
-.venv/bin/python -m src.inspect_dataset --data-dir data/dusha_emotion_audio/data --split train --sample-size 20
+python -m venv .venv
+source .venv/bin/activate
+pip install --upgrade pip
+pip install -r requirements.txt
+```
 
+Install PyTorch separately for the target machine. For CUDA, use the official
+PyTorch selector and match the command to your driver. The local GPU experiments
+were run with a CUDA-enabled PyTorch build on an NVIDIA GeForce RTX 3060.
+
+## Reproduce The Main CNN Result
+
+Assuming DUSHA is available at `data/dusha_emotion_audio/data`:
+
+```bash
 .venv/bin/python -m src.make_subset \
   --data-dir data/dusha_emotion_audio/data \
   --split train \
   --task binary \
-  --samples-per-class 300 \
-  --output data/processed/subset_binary.csv
+  --samples-per-class 9000 \
+  --seed 42 \
+  --output data/processed/subset_binary_train_9000.csv
 
 .venv/bin/python -m src.make_subset \
   --data-dir data/dusha_emotion_audio/data \
   --split test \
   --task binary \
-  --samples-per-class 300 \
-  --output data/processed/subset_binary_test.csv
-
-.venv/bin/python -m src.train_sklearn \
-  --subset-path data/processed/subset_binary.csv \
-  --artifacts-dir artifacts \
-  --run-name sklearn_logreg_binary_300 \
-  --model logreg \
-  --test-size 0.2 \
-  --seed 42
-
-.venv/bin/python -m src.train_sklearn \
-  --subset-path data/processed/subset_binary.csv \
-  --eval-subset-path data/processed/subset_binary_test.csv \
-  --artifacts-dir artifacts \
-  --run-name sklearn_logreg_binary_300_test_eval \
-  --model logreg \
-  --seed 42
-
-.venv/bin/python -m src.make_subset \
-  --data-dir data/dusha_emotion_audio/data \
-  --split train \
-  --task binary \
-  --samples-per-class 1000 \
-  --output data/processed/subset_binary_train_1000.csv
-
-.venv/bin/python -m src.make_subset \
-  --data-dir data/dusha_emotion_audio/data \
-  --split test \
-  --task binary \
-  --samples-per-class 1000 \
-  --output data/processed/subset_binary_test_1000.csv
-
-.venv/bin/python -m src.build_feature_cache \
-  --subset-path data/processed/subset_binary_train_1000.csv \
-  --output data/features/subset_binary_train_1000_features.npz
-
-.venv/bin/python -m src.build_feature_cache \
-  --subset-path data/processed/subset_binary_test_1000.csv \
-  --output data/features/subset_binary_test_1000_features.npz
-
-.venv/bin/python -m src.train_sklearn \
-  --features-path data/features/subset_binary_train_1000_features.npz \
-  --eval-features-path data/features/subset_binary_test_1000_features.npz \
-  --artifacts-dir artifacts \
-  --run-name sklearn_logreg_binary_1000_test_eval \
-  --model logreg \
-  --seed 42
-
-.venv/bin/python -m src.tune_sklearn \
-  --features-path data/features/subset_binary_train_1000_features.npz \
-  --eval-features-path data/features/subset_binary_test_1000_features.npz \
-  --artifacts-dir artifacts \
-  --run-name sklearn_svm_rbf_binary_1000_tuned \
-  --model svm_rbf \
-  --seed 42
+  --samples-per-class 2400 \
+  --seed 42 \
+  --output data/processed/subset_binary_test_2400.csv
 
 .venv/bin/python -m src.build_logmel_cache \
-  --subset-path data/processed/subset_binary_train_1000.csv \
-  --output data/features/subset_binary_train_1000_logmel_3s_64mels.npz \
+  --subset-path data/processed/subset_binary_train_9000.csv \
+  --output data/features/subset_binary_train_9000_logmel_6s_80mels_fft1024_hop256.npz \
   --sample-rate 16000 \
-  --duration 3.0 \
-  --n-mels 64
+  --duration 6.0 \
+  --n-mels 80 \
+  --n-fft 1024 \
+  --hop-length 256
 
 .venv/bin/python -m src.build_logmel_cache \
-  --subset-path data/processed/subset_binary_test_1000.csv \
-  --output data/features/subset_binary_test_1000_logmel_3s_64mels.npz \
+  --subset-path data/processed/subset_binary_test_2400.csv \
+  --output data/features/subset_binary_test_2400_logmel_6s_80mels_fft1024_hop256.npz \
   --sample-rate 16000 \
-  --duration 3.0 \
-  --n-mels 64
+  --duration 6.0 \
+  --n-mels 80 \
+  --n-fft 1024 \
+  --hop-length 256
 
 .venv/bin/python -m src.train_cnn_logmel \
-  --features-path data/features/subset_binary_train_1000_logmel_3s_64mels.npz \
-  --eval-features-path data/features/subset_binary_test_1000_logmel_3s_64mels.npz \
+  --features-path data/features/subset_binary_train_9000_logmel_6s_80mels_fft1024_hop256.npz \
+  --eval-features-path data/features/subset_binary_test_2400_logmel_6s_80mels_fft1024_hop256.npz \
   --artifacts-dir artifacts \
-  --run-name cnn_logmel_binary_1000_60ep_f1_scheduler \
-  --epochs 60 \
-  --batch-size 64 \
-  --learning-rate 0.001 \
-  --weight-decay 0.0001 \
-  --dropout 0.25 \
+  --run-name cnn_logmel_binary_9000_6s80mels_fft1024_hop256_wide_pool6_hidden512_1200ep_gpu \
+  --epochs 1200 \
+  --batch-size 128 \
+  --channels 32,64,128 \
+  --pool-output-size 6 \
+  --classifier-hidden-size 512 \
   --scheduler reduce_on_plateau \
   --lr-factor 0.5 \
-  --lr-patience 5 \
-  --patience 12 \
-  --seed 42
+  --lr-patience 10 \
+  --patience 120 \
+  --device cuda
+```
 
-.venv/bin/python -m src.compare_predictions \
-  --left artifacts/sklearn_svm_rbf_binary_1000_tuned/predictions.csv \
-  --left-name svm \
-  --right artifacts/cnn_logmel_binary_1000_60ep_f1_scheduler/predictions.csv \
-  --right-name cnn60 \
-  --output-dir artifacts/compare_svm_tuned_vs_cnn_logmel_60ep_f1_scheduler
+For CPU-only smoke tests, use smaller subsets and sklearn first.
 
+## Local Demo
+
+The demo records audio in the browser, sends WAV bytes to a local FastAPI
+backend, and returns the CNN prediction.
+
+```bash
+.venv/bin/python -m uvicorn src.web_demo:app --host 127.0.0.1 --port 8000
+```
+
+Open:
+
+```text
+http://127.0.0.1:8000
+```
+
+The checkpoint is not committed, so the demo requires the best model artifact to
+exist locally at:
+
+```text
+artifacts/cnn_logmel_binary_9000_6s80mels_fft1024_hop256_wide_pool6_hidden512_1200ep_gpu/model.pt
+```
+
+## Human Validation
+
+The project includes utilities for exporting compact review samples. Diana's
+role is human quality validation, not large-scale manual labeling:
+
+```text
+20-30 fragments -> ok / wrong / unclear / garbage / good example for thesis
+```
+
+Example:
+
+```bash
 .venv/bin/python -m src.make_validation_sample \
   --predictions-path artifacts/sklearn_logreg_binary_300/predictions.csv \
   --output artifacts/validation_sample_logreg_binary_300.csv \
@@ -242,102 +296,11 @@ python -m src.train_sklearn --subset-path data/processed/subset_binary.csv
   --overwrite
 ```
 
-Первый sklearn baseline на `subset_binary.csv`:
+## Notes For Public Review
 
-```text
-accuracy: 0.7333
-macro F1: 0.7327
-validation rows: 120
-```
-
-Честная оценка на отдельном balanced subset из DUSHA `test` split:
-
-```text
-accuracy: 0.6967
-macro F1: 0.6966
-test rows: 600
-```
-
-Larger cached run на `1000/1000` train и `1000/1000` test:
-
-```text
-LogisticRegression: accuracy 0.7165, macro F1 0.7164
-RBF-SVM:            accuracy 0.7180, macro F1 0.7179
-```
-
-Tuned cached runs с подбором hyperparameters и probability threshold на
-internal validation split, затем финальной оценкой на отдельном test cache:
-
-```text
-LogisticRegression tuned: accuracy 0.7165, macro F1 0.7157
-  best validation: C=0.03, class_weight=balanced, threshold=0.52
-
-RBF-SVM tuned:            accuracy 0.7200, macro F1 0.7195
-  best validation: C=10.0, gamma=0.003, class_weight=balanced, threshold=0.46
-```
-
-Первый compact CNN на log-mel spectrograms:
-
-```text
-input: 1 x 64 x 94
-architecture: Conv2d 16 -> 32 -> 64, BatchNorm, ReLU, MaxPool, AdaptiveAvgPool
-accuracy: 0.6155
-macro F1: 0.6107
-best threshold: 0.50
-comparison vs tuned SVM: both_correct 1003, svm_only_correct 437, cnn_only_correct 228, both_wrong 332
-```
-
-CNN с best checkpoint по validation macro F1, `ReduceLROnPlateau` и early
-stopping:
-
-```text
-run: cnn_logmel_binary_1000_60ep_f1_scheduler
-best epoch: 25
-epochs completed: 37 / 60
-accuracy: 0.6260
-macro F1: 0.6253
-best threshold: 0.50
-comparison vs tuned SVM: both_correct 1025, svm_only_correct 415, cnn60_only_correct 227, both_wrong 333
-```
-
-Разные подходы нужно сохранять в отдельные run directories через `--run-name`,
-чтобы результаты не перетирали друг друга:
-
-```bash
-.venv/bin/python -m src.train_sklearn \
-  --subset-path data/processed/subset_binary.csv \
-  --artifacts-dir artifacts \
-  --run-name sklearn_random_forest_binary_300 \
-  --model random_forest \
-  --n-estimators 300 \
-  --test-size 0.2 \
-  --seed 42
-```
-
-## Роль Дианы
-
-Не ручная каторжная разметка, а человеческая проверка качества:
-
-```text
-20-30 фрагментов -> ok / wrong / unclear / garbage / good example for thesis
-```
-
-Результат:
-
-```text
-artifacts/validation_sample_logreg_binary_300.csv
-```
-
-Поля для ручной проверки:
-
-```text
-human_label,human_comment,review_status,notes
-```
-
-Для удобной ручной проверки аудио экспортируется в отдельную папку:
-
-```text
-artifacts/validation_sample_logreg_binary_300_audio/
-```
-
-Внутри лежат 30 `.wav` с читаемыми именами и `review_sheet.csv`.
+- Data and generated artifacts are intentionally excluded from Git.
+- Metrics are recorded in `EXPERIMENT_LOG.md` with run names and artifact paths.
+- The best quoted number for the public README is external macro F1, not
+  internal validation macro F1.
+- Transformer models such as Wav2Vec2 or HuBERT are future work, not part of the
+  current MVP.

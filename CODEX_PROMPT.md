@@ -14,12 +14,6 @@ There is a legacy notebook by Diana at:
 legacy/diana_legacy.json.ipynb
 ```
 
-or, on the user's machine:
-
-```text
-/home/art/projects/vox_games/legacy/diana_legacy.json.ipynb
-```
-
 It contains useful ideas:
 
 - librosa audio loading;
